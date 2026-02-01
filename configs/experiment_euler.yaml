@@ -1,0 +1,12 @@
+# Experiment configuration using Euler integrator for dataset generation
+# ======================================================================
+
+_base_: default.yaml
+
+simulation:
+  integrator: "euler"
+  dt: 0.001 # Smaller timestep for stability
+
+experiment:
+  name: "euler_baseline"
+  description: "Baseline experiment with Euler integrator dataset"

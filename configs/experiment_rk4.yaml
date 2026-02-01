@@ -1,0 +1,12 @@
+# Experiment configuration using RK4 integrator for dataset generation
+# =====================================================================
+
+_base_: default.yaml
+
+simulation:
+  integrator: "rk4"
+  dt: 0.01
+
+experiment:
+  name: "rk4_experiment"
+  description: "Experiment with RK4 integrator dataset"
