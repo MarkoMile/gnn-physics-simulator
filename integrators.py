@@ -27,7 +27,7 @@ class Integrator(ABC):
         Returns:
             Updated state after time step
         """
-        pass
+        return state
 
 
 class EulerIntegrator(Integrator):
@@ -62,9 +62,28 @@ class RK4Integrator(Integrator):
     
     def step(self, state, dt, force_fn):
         """Perform one RK4 integration step."""
-        # TODO: Implement RK4 integration
-        raise NotImplementedError("RK4Integrator not implemented yet")
+        positions, velocities = state
 
+        # k1 = f(y_n)
+        k1_v = force_fn(positions)
+        k1_x = velocities
+
+        # k2 = f(y_n + dt/2 * k1)
+        k2_v = force_fn(positions + k1_x * dt / 2)
+        k2_x = velocities + k1_v * dt / 2
+
+        # k3 = f(y_n + dt/2 * k2)
+        k3_v = force_fn(positions + k2_x * dt / 2)
+        k3_x = velocities + k2_v * dt / 2
+
+        # k4 = f(y_n + dt * k3)
+        k4_v = force_fn(positions + k3_x * dt)
+        k4_x = velocities + k3_v * dt
+
+        new_positions = positions + (k1_x + 2 * k2_x + 2 * k3_x + k4_x) * dt / 6
+        new_velocities = velocities + (k1_v + 2 * k2_v + 2 * k3_v + k4_v) * dt / 6
+
+        return new_positions, new_velocities
 
 class LeapfrogIntegrator(Integrator):
     """
