@@ -1,0 +1,21 @@
+# Default configuration from "Learning to Simulate Complex Physics with Graph Networks" (Sanchez-Gonzalez et al. 2020)
+# https://arxiv.org/abs/2002.09405
+
+model:
+  message_passing_steps: 10
+  hidden_dim: 128
+  num_mlp_layers: 2
+  activation: 'relu'
+
+training:
+  batch_size: 2
+  learning_rate: 1.0e-4
+  lr_decay_rate: 0.1
+  lr_decay_steps: 5000000
+  noise_std: 3.0e-4
+  optimizer: 'adam'
+
+data:
+  history_window: 5
+  connectivity_radius: 0.015
+  spatial_dim: 2
