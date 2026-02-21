@@ -6,51 +6,18 @@ Inspired by Stanford CS224W blog post: https://medium.com/stanford-cs224w/simula
 
 ## Project Structure
 
-See [docs/PROJECT_STRUCTURE.md](docs/PROJECT_STRUCTURE.md) for the complete file structure.
+A minimal project layout featuring two primary notebooks using independent Python modules.
 
-## Implementation Progress
-
-### Phase 1: Data Generation
-
-- [ ] Implement numerical integrators (Euler, RK4, Leapfrog, Verlet)
-- [ ] Implement N-body gravitational simulation
-- [ ] Create dataset generation script
-- [ ] Generate training/validation/test datasets
-
-### Phase 2: Data Processing
-
-- [ ] Implement graph construction utilities
-- [ ] Create PyTorch Dataset classes
-- [ ] Implement data preprocessing pipeline
-- [ ] Add data normalization/standardization
-
-### Phase 3: Model Development
-
-- [ ] Implement node/edge encoders
-- [ ] Implement message passing layers
-- [ ] Implement decoder network
-- [ ] Build complete GNN simulator model
-
-### Phase 4: Training
-
-- [ ] Implement training loop
-- [ ] Add loss functions (MSE, rollout loss)
-- [ ] Implement learning rate schedulers
-- [ ] Add checkpointing and logging
-
-### Phase 5: Evaluation
-
-- [ ] Implement evaluation metrics
-- [ ] Add rollout evaluation
-- [ ] Create visualization utilities
-- [ ] Compare GNN vs numerical integrators
-
-### Phase 6: Documentation & Polish
-
-- [ ] Add Google Colab support
-- [ ] Write unit tests
-- [ ] Complete documentation
-- [ ] Final experiments and analysis
+```
+gnn-physics-simulator/
+├── Project.ipynb       # Main project notebook (theory, model definition, training)
+├── TestSim.ipynb       # Testing/visualization for the N-Body numerical simulation
+├── simulation.py       # Core N-Body generator
+├── integrators.py      # Euler, RK4, Leapfrog, and Verlet integrators
+├── models.py           # PyTorch GNN components
+├── dataset.py          # PyTorch Geometric dataset generation
+└── utils.py            # Graph construction and helper methods
+```
 
 ## Installation
 
@@ -65,44 +32,10 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 
 # Install dependencies
 pip install -r requirements.txt
-
-# Install package in development mode
-pip install -e .
 ```
 
 ## Quick Start
-
-### 1. Generate Dataset
-
-Generate N-body simulation trajectories using numerical integrators:
-
-```bash
-python scripts/generate_dataset.py --config configs/default.yaml
-```
-
-### 2. Preprocess Data
-
-Preprocess and split the data:
-
-```bash
-python scripts/preprocess_data.py --input data/raw --output data/processed
-```
-
-### 3. Train Model
-
-Train the GNN simulator:
-
-```bash
-python scripts/train.py --config configs/default.yaml
-```
-
-### 4. Evaluate Model
-
-Evaluate the trained model:
-
-```bash
-python scripts/evaluate.py --checkpoint checkpoints/best.pt --test-data data/processed/test
-```
+Open `Project.ipynb` in your IDE or Jupyter interface to explore the project presentation, execute dataset generation, and train or load the primary GNN model. Alternatively, exploring the `TestSim.ipynb` notebook provides isolated visualization boundaries for tracking energy conservation of the ground-truth integration methods.
 
 ## Numerical Integrators
 
@@ -110,14 +43,9 @@ The project implements the following numerical integrators for generating traini
 
 - **Euler**: First-order explicit method
 - **RK4**: Fourth-order Runge-Kutta method
-- **Leapfrog**: Symplectic integrator (Störmer-Verlet)
-- **Verlet**: Velocity Verlet integrator
+- **Leapfrog**: Symplectic integrator (Störmer-Verlet) (TODO: implement)
+- **Verlet**: Velocity Verlet integrator (TODO: implement)
 
-Compare integrators:
-
-```bash
-python scripts/compare_integrators.py --integrators euler rk4 leapfrog verlet
-```
 
 ## Model Architecture
 
@@ -133,6 +61,10 @@ The GNN simulator follows the Interaction Network architecture:
 - [Interaction Networks for Learning about Objects, Relations and Physics](https://arxiv.org/abs/1612.00222)
 - [Stanford CS224W Blog Post](https://medium.com/stanford-cs224w/simulating-complex-physics-with-graph-networks-step-by-step-177354cb9b05)
 - [PyTorch Geometric](https://pytorch-geometric.readthedocs.io/)
+
+## Notes
+
+This project was done as an optional project for the course Numerical Algorithms and Numerical Software (E231) at the Faculty of Technical Sciences, University of Novi Sad.
 
 ## License
 
