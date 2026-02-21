@@ -19,6 +19,9 @@ data:
   history_window: 5
   connectivity_radius: 0.015
   spatial_dim: 2
+  dataset_path: 'data/WaterDropSample'
+  dataset_format: 'tfrecord' # Options: 'npz' (native Python) or 'tfrecord' (DeepMind)
+
 
 # Simulation config (for generating dataset)
 

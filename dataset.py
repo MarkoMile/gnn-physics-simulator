@@ -7,6 +7,10 @@ and processing particle trajectory data for GNN training.
 
 import torch
 from torch.utils.data import Dataset
+from typing import Dict, Any, List, Optional
+import os
+import json
+import numpy as np
 
 
 class ParticleDataset(Dataset):
@@ -75,18 +79,136 @@ This module contains functions for:
 """
 
 
-def load_raw_data(data_path: str):
+def load_raw_data(data_path: str, dataset_format: str = "npz") -> Dict[str, Any]:
     """
-    Load raw simulation data from files.
+    Load raw simulation data from files, supporting either native NPZ or DeepMind TFRecord formats.
     
     Args:
         data_path: Path to raw data directory
+        dataset_format: Format to load ('npz' or 'tfrecord')
         
     Returns:
-        Raw trajectory data
+        Dictionary containing metadata and dataset splits ('train', 'valid', 'test').
+        Each split contains a list of trajectory dictionaries.
     """
-    # TODO: Implement raw data loading
-    raise NotImplementedError("load_raw_data not implemented yet")
+    dataset = {'splits': {}}
+    
+    # 1. Load Metadata
+    meta_path = os.path.join(data_path, "metadata.json")
+    if not os.path.exists(meta_path):
+        raise FileNotFoundError(f"metadata.json not found in {data_path}")
+        
+    with open(meta_path, "r") as f:
+        dataset['metadata'] = json.load(f)
+        
+    # 2. Route loader based on format requested
+    if dataset_format == "npz":
+        for split in ['train', 'valid', 'test']:
+            split_path = os.path.join(data_path, f"{split}.npz")
+            if os.path.exists(split_path):
+                data = np.load(split_path, allow_pickle=True)
+                # Convert the NPZ dictionary keys back into a list of trajectory dicts
+                dataset['splits'][split] = [data[k].item() for k in data.files]
+            else:
+                dataset['splits'][split] = []
+                
+    elif dataset_format == "tfrecord":
+        dataset['splits'] = _parse_tfrecords(data_path)
+    else:
+        raise ValueError(f"Unsupported dataset format: {dataset_format}. Use 'npz' or 'tfrecord'.")
+        
+    return dataset
+
+
+def _parse_tfrecords(data_path: str) -> Dict[str, List[Dict[str, np.ndarray]]]:
+    """
+    Dynamically loads TensorFlow to parse DeepMind TFRecord `SequenceExample` protobufs,
+    converting them firmly into pure NumPy dictionaries matching the .npz structure.
+    """
+    try:
+        import tensorflow as tf
+        # Turn off TF noisy logging
+        os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3' 
+        tf.get_logger().setLevel('ERROR')
+    except ImportError:
+        raise ImportError(
+            "TensorFlow is required to parse .tfrecord files. "
+            "Please install it via `pip install tensorflow` or switch to the 'npz' dataset format."
+        )
+
+    splits = {}
+    
+    # Matching deepmind 'reading_utils.py' definitions
+    feature_description = {
+        'position': tf.io.VarLenFeature(tf.string),
+    }
+    context_features = {
+        'key': tf.io.FixedLenFeature([], tf.int64, default_value=0),
+        'particle_type': tf.io.VarLenFeature(tf.string)
+    }
+    
+    # Retrieve dim and sequence_length from metadata to shape the arrays correctly
+    meta_path = os.path.join(data_path, "metadata.json")
+    with open(meta_path, "r") as f:
+        metadata = json.load(f)
+    seq_len = metadata['sequence_length']
+    dim = metadata['dim']
+
+    for split_name in ['train', 'valid', 'test']:
+        tfrecord_path = os.path.join(data_path, f"{split_name}.tfrecord")
+        trajectories = []
+        
+        if os.path.exists(tfrecord_path):
+            raw_dataset = tf.data.TFRecordDataset([tfrecord_path])
+            
+            for serialized_example in raw_dataset:
+                # Parse sequence example
+                context, sequence = tf.io.parse_single_sequence_example(
+                    serialized_example,
+                    context_features=context_features,
+                    sequence_features=feature_description
+                )
+                
+                # Extract and cast particle_type from context
+                p_type_bytes = context['particle_type'].values.numpy()
+                particle_type = np.frombuffer(p_type_bytes[0], dtype=np.int64)
+                
+                # Extract and cast positions from sequence
+                pos_bytes = sequence['position'].values.numpy()
+                # TF stores the position frames as a list of bytes. 
+                # According to deepmind reading_utils, sequence_length + 1 frames present
+                positions = []
+                for step_bytes in pos_bytes:
+                    step_pos = np.frombuffer(step_bytes, dtype=np.float32)
+                    positions.append(step_pos)
+                
+                # Reshape positions to [sequence_length + 1, num_particles, dim]
+                # Note: Deepmind's data often includes a 0th frame for velocity derivation.
+                positions = np.array(positions)
+                positions = positions.reshape(seq_len + 1, -1, dim)
+                
+                # Reconstruct full trajectory dictionary mapping to our native NPZ schema!
+                # DeepMind datasets don't explicitly store velocity or mass, so we
+                # derive velocity via backward difference, and set mass to 1.0 globally.
+                velocities = positions[1:] - positions[:-1]
+                
+                # Clip the position 0th element to sync shapes [T, N, D]
+                synced_positions = positions[1:]
+                
+                num_particles = synced_positions.shape[1]
+                masses = np.ones(num_particles, dtype=np.float32)
+                
+                traj_dict = {
+                    'particle_type': particle_type,
+                    'position': synced_positions,
+                    'velocity': velocities,
+                    'mass': masses
+                }
+                trajectories.append(traj_dict)
+                
+        splits[split_name] = trajectories
+        
+    return splits
 
 
 def normalize_data(data, stats=None):
@@ -117,23 +239,6 @@ def compute_connectivity(positions, connectivity_radius: float):
     """
     # TODO: Implement connectivity computation
     raise NotImplementedError("compute_connectivity not implemented yet")
-
-
-def create_data_splits(data, train_ratio=0.8, val_ratio=0.1, test_ratio=0.1):
-    """
-    Split data into train, validation, and test sets.
-    
-    Args:
-        data: Full dataset
-        train_ratio: Fraction for training
-        val_ratio: Fraction for validation
-        test_ratio: Fraction for testing
-        
-    Returns:
-        Train, validation, and test splits
-    """
-    # TODO: Implement data splitting
-    raise NotImplementedError("create_data_splits not implemented yet")
 
 
 """

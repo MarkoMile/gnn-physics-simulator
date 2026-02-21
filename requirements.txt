@@ -7,6 +7,9 @@ matplotlib>=3.5.0
 torch>=2.0.0
 torch-geometric>=2.3.0
 
+# Optional: TFRecord loading from DeepMind datasets
+tensorflow-cpu>=2.10.0
+
 # Configuration
 pyyaml>=6.0
 omegaconf>=2.3.0
