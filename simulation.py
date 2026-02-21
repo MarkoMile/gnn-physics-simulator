@@ -55,6 +55,10 @@ class NBodySimulation:
         self.positions = np.random.uniform(-position_scale, position_scale, (self.num_particles, 3))
         self.velocities = np.random.uniform(-velocity_scale, velocity_scale, (self.num_particles, 3))
         self.masses = np.random.uniform(mass_range[0], mass_range[1], self.num_particles)
+
+        #Initialize to 2D
+        self.positions[:, 2] = 0.0
+        self.velocities[:, 2] = 0.0
     
     def compute_gravitational_forces(self, positions: np.ndarray, masses: np.ndarray) -> np.ndarray:
         """
