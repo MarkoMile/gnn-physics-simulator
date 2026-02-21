@@ -8,7 +8,9 @@ training data for the GNN simulator.
 """
 
 import numpy as np
-from typing import Tuple, Optional
+import os
+import json
+from typing import Tuple, Optional, Dict, Any
 
 
 class NBodySimulation:
@@ -207,9 +209,9 @@ def generate_dataset(
     integrator: str = 'rk4',
     save_path: str = None,
     **simulation_kwargs
-) -> Dict[str, np.ndarray]:
+) -> Dict[str, Any]:
     """
-    Generate a dataset of N-body trajectories.
+    Generate a dataset of N-body trajectories matching DeepMind's sequence structure.
     
     Args:
         num_trajectories: Number of trajectories to generate
@@ -221,25 +223,120 @@ def generate_dataset(
         **simulation_kwargs: Additional simulation parameters
         
     Returns:
-        Dictionary containing positions, velocities, masses, etc.
+        Dictionary containing trajectories with positions, types, masses, etc.
     """
-    # TODO: Implement dataset generation
-    raise NotImplementedError("generate_dataset not implemented yet")
+    from tqdm import tqdm
+    
+    gravitational_constant = simulation_kwargs.get('gravitational_constant', 1.0)
+    softening_length = simulation_kwargs.get('softening_length', 0.01)
+    
+    position_scale = simulation_kwargs.get('position_scale', 1.0)
+    velocity_scale = simulation_kwargs.get('velocity_scale', 0.1)
+    mass_range = simulation_kwargs.get('mass_range', (0.5, 1.5))
+    save_every = simulation_kwargs.get('save_every', 10)
+    
+    trajectories = []
+    
+    for _ in tqdm(range(num_trajectories), desc="Generating Trajectories"):
+        sim = NBodySimulation(
+            num_particles=num_particles,
+            gravitational_constant=gravitational_constant,
+            softening_length=softening_length,
+            integrator=integrator
+        )
+        sim.initialize_random_state(
+            position_scale=position_scale,
+            velocity_scale=velocity_scale,
+            mass_range=mass_range
+        )
+        
+        history_positions, history_velocities, _ = sim.simulate(
+            total_time=total_time,
+            dt=dt,
+            save_every=save_every
+        )
+        
+        # Save trajectory in a format mimicking DeepMind's TFRecords
+        traj_data = {
+            'particle_type': np.zeros(num_particles, dtype=np.int64),  # Type 0 for all gravitational particles
+            'position': history_positions.astype(np.float32),
+            'velocity': history_velocities.astype(np.float32),
+            'mass': sim.masses.astype(np.float32)
+        }
+        trajectories.append(traj_data)
+        
+    dataset = {'trajectories': trajectories}
+    
+    if save_path:
+        save_dataset(dataset, save_path, dt * save_every)
+        
+    return dataset
 
 
-def save_dataset(data: Dict[str, np.ndarray], save_path: str):
+def save_dataset(dataset: Dict[str, Any], save_path: str, save_dt: float):
     """
-    Save dataset to disk.
+    Save dataset to disk in NPZ format along with metadata.json.
     
     Args:
-        data: Dataset dictionary
+        dataset: Dataset dictionary containing list of trajectories
         save_path: Path to save directory
+        save_dt: The time delta between saved frames (dt * save_every)
     """
-    # TODO: Implement dataset saving
-    raise NotImplementedError("save_dataset not implemented yet")
+    os.makedirs(save_path, exist_ok=True)
+    
+    all_vels = []
+    all_accs = []
+    
+    trajectories = dataset['trajectories']
+    dim = trajectories[0]['position'].shape[-1]
+    
+    # Compute global kinematic stats across the dataset for the metadata.json
+    for traj in trajectories:
+        pos = traj['position']
+        # Compute derived velocities and accelerations for normalization (like DeepMind)
+        vel = pos[1:] - pos[:-1]
+        acc = vel[1:] - vel[:-1]
+        
+        all_vels.append(vel.reshape(-1, dim))
+        all_accs.append(acc.reshape(-1, dim))
+        
+    all_vels = np.concatenate(all_vels, axis=0)
+    all_accs = np.concatenate(all_accs, axis=0)
+    
+    metadata = {
+        "bounds": [[-5.0, 5.0] for _ in range(dim)], 
+        "sequence_length": trajectories[0]['position'].shape[0],
+        "default_connectivity_radius": 1.0,
+        "dim": dim,
+        "dt": save_dt,
+        "vel_mean": all_vels.mean(axis=0).tolist(),
+        "vel_std": all_vels.std(axis=0).tolist(),
+        "acc_mean": all_accs.mean(axis=0).tolist(),
+        "acc_std": all_accs.std(axis=0).tolist()
+    }
+    
+    with open(os.path.join(save_path, "metadata.json"), "w") as f:
+        json.dump(metadata, f, indent=4)
+        
+    # Split trajectories
+    num_traj = len(trajectories)
+    train_idx = int(0.8 * num_traj)
+    valid_idx = int(0.9 * num_traj)
+    
+    splits = {
+        'train': trajectories[:train_idx],
+        'valid': trajectories[train_idx:valid_idx],
+        'test': trajectories[valid_idx:]
+    }
+    
+    for split_name, split_trajs in splits.items():
+        if len(split_trajs) > 0:
+            # We compress them as a sequence of dicts to a single .npz
+            save_dict = {f"trajectory_{i}": traj for i, traj in enumerate(split_trajs)}
+            np.savez_compressed(os.path.join(save_path, f"{split_name}.npz"), **save_dict)
 
 
-def load_dataset(load_path: str) -> Dict[str, np.ndarray]:
+def load_dataset(load_path: str) -> Dict[str, Any]:
     """
     Load dataset from disk.
     
@@ -247,9 +344,19 @@ def load_dataset(load_path: str) -> Dict[str, np.ndarray]:
         load_path: Path to dataset directory
         
     Returns:
-        Dataset dictionary
+        Dataset dictionary with splits and metadata
     """
-    # TODO: Implement dataset loading
-    raise NotImplementedError("load_dataset not implemented yet")
+    dataset = {}
+    with open(os.path.join(load_path, "metadata.json"), "r") as f:
+        dataset['metadata'] = json.load(f)
+        
+    dataset['splits'] = {}
+    for split in ['train', 'valid', 'test']:
+        split_path = os.path.join(load_path, f"{split}.npz")
+        if os.path.exists(split_path):
+            data = np.load(split_path, allow_pickle=True)
+            dataset['splits'][split] = [data[k].item() for k in data.files]
+            
+    return dataset
 
 
