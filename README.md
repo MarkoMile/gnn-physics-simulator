@@ -15,8 +15,7 @@ gnn-physics-simulator/
 ├── simulation.py       # Core N-Body generator
 ├── integrators.py      # Euler, RK4, Leapfrog, and Verlet integrators
 ├── models.py           # PyTorch GNN components
-├── dataset.py          # PyTorch Geometric dataset generation
-└── utils.py            # Graph construction and helper methods
+└── dataset.py          # PyTorch Geometric dataset generation
 ```
 
 ## Installation
