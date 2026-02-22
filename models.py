@@ -7,7 +7,60 @@ following the Interaction Network / Graph Network architecture.
 
 import torch
 import torch.nn as nn
+from typing import Dict, Any, Optional
 
+class Normalizer(nn.Module):
+    """
+    Dynamically tracks the mean and variance of node/edge features 
+    as they are passed through the network during training, to normalize
+    them without needing pre-computed dataset statistics.
+    """
+    def __init__(self, size: int, max_accumulations: int = 10**6, epsilon: float = 1e-8):
+        super().__init__()
+        self.max_accumulations = max_accumulations
+        self.epsilon = epsilon
+        
+        # Buffer so they are saved to state_dict but not treated as trainable parameters
+        self.register_buffer('acc_count', torch.tensor(0, dtype=torch.float32))
+        self.register_buffer('num_accumulations', torch.tensor(0, dtype=torch.float32))
+        self.register_buffer('acc_sum', torch.zeros(size, dtype=torch.float32))
+        self.register_buffer('acc_sum_squared', torch.zeros(size, dtype=torch.float32))
+
+    def forward(self, batched_data: torch.Tensor, accumulate: bool = True) -> torch.Tensor:
+        """
+        Normalizes the input and conditionally accumulates its statistics.
+        """
+        if accumulate and self.num_accumulations < self.max_accumulations:
+            self._accumulate(batched_data)
+            
+        return (batched_data - self._mean()) / self._std_with_epsilon()
+
+    def inverse(self, normalized_data: torch.Tensor) -> torch.Tensor:
+        """
+        Un-normalizes the data (used for translating predicted accelerations back to physics).
+        """
+        return normalized_data * self._std_with_epsilon() + self._mean()
+
+    def _accumulate(self, batched_data: torch.Tensor):
+        count = batched_data.shape[0]
+        data_sum = torch.sum(batched_data, dim=0)
+        data_sum_squared = torch.sum(batched_data**2, dim=0)
+        
+        self.acc_sum += data_sum
+        self.acc_sum_squared += data_sum_squared
+        self.acc_count += count
+        self.num_accumulations += 1
+
+    def _mean(self) -> torch.Tensor:
+        safe_count = torch.clamp(self.acc_count, min=1.0)
+        return self.acc_sum / safe_count
+
+    def _std_with_epsilon(self) -> torch.Tensor:
+        safe_count = torch.clamp(self.acc_count, min=1.0)
+        variance = (self.acc_sum_squared / safe_count) - self._mean()**2
+        # Ensure non-negative variance before square root
+        safe_variance = torch.clamp(variance, min=0.0)
+        return torch.sqrt(safe_variance + self.epsilon)
 
 class GNNSimulator(nn.Module):
     """
@@ -38,8 +91,19 @@ class GNNSimulator(nn.Module):
             output_dim: Output dimension (typically 3 for acceleration)
         """
         super().__init__()
-        # TODO: Implement model initialization
-        raise NotImplementedError("GNNSimulator not implemented yet")
+        
+        self.node_features = node_features
+        self.edge_features = edge_features
+        
+        # 1. Initialize Dynamic Normalizers
+        # Node features (velocity history + mass, etc)
+        self.node_normalizer = Normalizer(size=node_features)
+        # Edge features (relative displacement vector + distance magnitude)
+        self.edge_normalizer = Normalizer(size=edge_features)
+        # Target acceleration normalizer (output)
+        self.output_normalizer = Normalizer(size=output_dim)
+        
+        # TODO: Initialize Encoder, Processor, and Decoder networks
     
     def forward(self, graph):
         """
@@ -51,7 +115,10 @@ class GNNSimulator(nn.Module):
         Returns:
             Predicted accelerations for each particle
         """
-        # TODO: Implement forward pass
+        # TODO: Normalize graph node and edge inputs
+        # normalized_nodes = self.node_normalizer(graph.x, accumulate=self.training)
+        # ... forward pass ...
+        
         raise NotImplementedError("forward not implemented yet")
 
 
