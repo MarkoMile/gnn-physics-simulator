@@ -188,6 +188,158 @@ class NBodySimulation:
         
         return float(kinetic_energy + potential_energy)
 
+class FluidSimulation:
+    """
+    Fluid dynamics simulation using a pseudo-SPH method.
+    Simulates water drop splash interactions mapping native downward gravity,
+    inelastic repulsions, and a rigid simulation boundary explicitly defined.
+    """
+    
+    def __init__(
+        self,
+        num_particles: int,
+        gravitational_constant: float = 9.8,
+        softening_length: float = 0.05,
+        integrator: str = 'rk4',
+        position_scale: float = 1.0
+    ):
+        self.num_particles = num_particles
+        self.gravitational_constant = gravitational_constant
+        self.softening_length = softening_length
+        self.integrator = get_integrator(integrator)
+        self.position_scale = position_scale
+
+    def initialize_random_state(
+        self,
+        position_scale: float = 1.0,
+        velocity_scale: float = 0.1,
+        mass_range: Tuple[float, float] = (1.0, 1.0)
+    ):
+        """Initializes a clustered 'Water Drop' layout near the top of the box."""
+        self.positions = np.zeros((self.num_particles, 3))
+        # Cluster at the top of the screen forming a drop width 0.5 * scale
+        self.positions[:, 0] = np.random.uniform(-position_scale * 0.5, position_scale * 0.5, self.num_particles)
+        # Cluster near the top edge Y in [0.5, 0.9] of the box!
+        self.positions[:, 1] = np.random.uniform(position_scale * 0.5, position_scale * 0.9, self.num_particles)
+        
+        # Enforce exactly 2D coordinate projections
+        self.positions[:, 2] = 0.0
+        
+        self.velocities = np.random.uniform(-velocity_scale, velocity_scale, (self.num_particles, 3))
+        self.velocities[:, 2] = 0.0
+        
+        self.masses = np.random.uniform(mass_range[0], mass_range[1], self.num_particles)
+
+    def compute_forces(self, positions: np.ndarray, masses: np.ndarray) -> np.ndarray:
+        accelerations = np.zeros_like(positions)
+        
+        # 1. Downward Gravity Target
+        accelerations[:, 1] -= self.gravitational_constant
+        
+        # 2. SPH Repulsive Pressure
+        r = positions[np.newaxis, :, :] - positions[:, np.newaxis, :]
+        r_sq = np.sum(r**2, axis=-1)
+        np.fill_diagonal(r_sq, np.inf)
+        
+        # Trigger extremely aggressive repulsion if squeezed closer than 2x collision margin
+        repulsion_radius = self.softening_length * 2.0
+        mask = r_sq < (repulsion_radius**2)
+        
+        if np.any(mask):
+            r_dist = np.sqrt(r_sq[mask])
+            # Secure numerical division by clamping identical overlapping particles
+            r_dist_safe = np.maximum(r_dist, 1e-8)
+            f_mag = 15.0 * self.gravitational_constant * (1.0 - r_dist_safe / repulsion_radius)**2
+            r_dir = r[mask] / r_dist_safe[:, np.newaxis]
+            
+            rep_acc = np.zeros_like(positions)
+            np.add.at(rep_acc, np.nonzero(mask)[0], f_mag[:, np.newaxis] * r_dir)
+            accelerations += rep_acc
+            
+        return accelerations
+
+    def apply_boundaries(self, positions: np.ndarray, velocities: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        """Snaps particles exactly inside clipbox domains after integration step executing continuous inelastic reflection"""
+        limit = self.position_scale
+        restitution = 0.5 # 50% energy loss upon hitting container wall
+        
+        for axis in range(2): # Process exactly X and Y limits (2D fluid bounding)
+            mask_low = positions[:, axis] < -limit
+            mask_high = positions[:, axis] > limit
+            
+            positions[mask_low, axis] = -limit
+            velocities[mask_low, axis] = np.abs(velocities[mask_low, axis]) * restitution
+            
+            positions[mask_high, axis] = limit
+            velocities[mask_high, axis] = -np.abs(velocities[mask_high, axis]) * restitution
+            
+        return positions, velocities
+
+    def simulate(self, total_time: float, dt: float, save_every: int = 1) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        total_steps = int(total_time / dt)
+        num_saved = (total_steps // save_every) + 1
+        history_positions = np.zeros((num_saved, self.num_particles, 3))
+        history_velocities = np.zeros((num_saved, self.num_particles, 3))
+        history_times = np.zeros(num_saved)
+        
+        pos = self.positions.copy()
+        vel = self.velocities.copy()
+        
+        def force_fn(positions_array):
+            return self.compute_forces(positions_array, self.masses)
+            
+        save_idx = 0
+        for step in range(total_steps + 1):
+            if step % save_every == 0:
+                history_positions[save_idx] = pos
+                history_velocities[save_idx] = vel
+                history_times[save_idx] = step * dt
+                save_idx += 1
+                
+            if step < total_steps:
+                pos, vel = self.integrator.step((pos, vel), dt, force_fn)
+                pos, vel = self.apply_boundaries(pos, vel)
+                
+        self.positions = pos
+        self.velocities = vel
+        
+        return history_positions[:save_idx], history_velocities[:save_idx], history_times[:save_idx]
+
+    def compute_total_energy(self) -> float:
+        """
+        Compute total energy (kinetic + potential).
+        
+        Returns:
+            Total energy of the system
+        """
+        if not hasattr(self, 'positions') or not hasattr(self, 'velocities') or not hasattr(self, 'masses'):
+            raise ValueError("Simulation state not initialized. Call initialize_random_state() first.")
+            
+        # Kinetic Energy: K = 0.5 * sum(m * v^2)
+        v_sq = np.sum(self.velocities**2, axis=-1)
+        kinetic_energy = 0.5 * np.sum(self.masses * v_sq)
+        
+        # Potential Energy (Gravity): U = m * g * y
+        potential_energy_gravity = np.sum(self.masses * self.gravitational_constant * self.positions[:, 1])
+        
+        # Potential Energy (SPH Repulsion)
+        r = self.positions[np.newaxis, :, :] - self.positions[:, np.newaxis, :]
+        r_sq = np.sum(r**2, axis=-1)
+        repulsion_radius = self.softening_length * 2.0
+        
+        # Upper triangle to avoid double counting pairs
+        mask = (r_sq < repulsion_radius**2) & np.triu(np.ones_like(r_sq, dtype=bool), k=1)
+        
+        potential_energy_repulsion = 0.0
+        if np.any(mask):
+            r_dist = np.sqrt(r_sq[mask])
+            # Integrating the repulsive force F_mag = 15.0 * G * (1 - r/R)^2 yields U = 5.0 * G * R * (1 - r/R)^3
+            u_rep = 5.0 * self.gravitational_constant * repulsion_radius * (1.0 - r_dist / repulsion_radius)**3
+            potential_energy_repulsion = np.sum(u_rep)
+            
+        return float(kinetic_energy + potential_energy_gravity + potential_energy_repulsion)
+
+
 
 """
 Dataset generation utilities.
@@ -227,6 +379,7 @@ def generate_dataset(
     """
     from tqdm import tqdm
     
+    simulation_type = simulation_kwargs.get('type', 'n_body')
     gravitational_constant = simulation_kwargs.get('gravitational_constant', 1.0)
     softening_length = simulation_kwargs.get('softening_length', 0.01)
     
@@ -237,13 +390,23 @@ def generate_dataset(
     
     trajectories = []
     
-    for _ in tqdm(range(num_trajectories), desc="Generating Trajectories"):
-        sim = NBodySimulation(
-            num_particles=num_particles,
-            gravitational_constant=gravitational_constant,
-            softening_length=softening_length,
-            integrator=integrator
-        )
+    for _ in tqdm(range(num_trajectories), desc=f"Generating {simulation_type} Trajectories"):
+        if simulation_type == 'fluid':
+            sim = FluidSimulation(
+                num_particles=num_particles,
+                gravitational_constant=gravitational_constant,
+                softening_length=softening_length,
+                integrator=integrator,
+                position_scale=position_scale
+            )
+        else:
+            sim = NBodySimulation(
+                num_particles=num_particles,
+                gravitational_constant=gravitational_constant,
+                softening_length=softening_length,
+                integrator=integrator
+            )
+            
         sim.initialize_random_state(
             position_scale=position_scale,
             velocity_scale=velocity_scale,

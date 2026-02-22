@@ -41,6 +41,7 @@ def main():
         save_every=sim_cfg.get('save_every', 10),
         integrator=sim_cfg.get('integrator', 'rk4'),
         save_path=args.output,
+        type=sim_cfg.get('type', 'n_body'),
         gravitational_constant=sim_cfg.get('gravitational_constant', 1.0),
         softening_length=sim_cfg.get('softening_length', 0.1),
         position_scale=sim_cfg.get('position_scale', 2.0),

@@ -26,6 +26,7 @@ data:
 # Simulation config (for generating dataset)
 
 simulation:
+  type: 'n_body'               # Set to 'n_body' for space simulation, 'fluid' for WaterDrop
   num_trajectories: 1000      # 1000 train trajectories (Deepmind spec)
   num_particles: 100         # ~100 particles per volume (maybe 1000 would be better?)
   total_time: 2.0             # 2.0s real physical time
