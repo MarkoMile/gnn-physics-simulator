@@ -7,6 +7,7 @@ and processing particle trajectory data for GNN training.
 
 import torch
 from torch.utils.data import Dataset
+from torch_geometric.nn import radius_graph
 from typing import Dict, Any, List, Optional
 import os
 import json
@@ -79,12 +80,17 @@ class ParticleDataset(Dataset):
         # Move N to front, then flatten C and D
         input_vel_flat = input_vel.transpose(1, 0, 2).reshape(N, history_window * D)
         
+        # Calculate dynamic edge connectivity using spatial KDTree!
+        pos_tensor = torch.from_numpy(input_pos)
+        edge_index = compute_connectivity(pos_tensor, self.metadata.get('default_connectivity_radius', 0.015))
+        
         return {
-            'pos': torch.from_numpy(input_pos),
+            'pos': pos_tensor,
             'vel_history': torch.from_numpy(input_vel_flat),
             'particle_type': torch.from_numpy(particle_type),
             'mass': torch.from_numpy(mass),
-            'target_acc': torch.from_numpy(target_acc)
+            'target_acc': torch.from_numpy(target_acc),
+            'edge_index': edge_index
         }
 
 
@@ -232,19 +238,28 @@ def _parse_tfrecords(data_path: str) -> Dict[str, List[Dict[str, np.ndarray]]]:
 
 
 
-def compute_connectivity(positions, connectivity_radius: float):
+def compute_connectivity(positions: torch.Tensor, connectivity_radius: float) -> torch.Tensor:
     """
-    Compute graph connectivity based on particle positions.
+    Compute graph connectivity dynamically based on particle spatial positions.
+    Uses an optimized KDTree search algorithm to find pairs rapidly.
     
     Args:
-        positions: Particle positions [N, 3]
-        connectivity_radius: Maximum distance for edge creation
+        positions: Particle positions [N, D]
+        connectivity_radius: Maximum Euclidean distance for edge creation
         
     Returns:
-        Edge index tensor [2, E]
+        Edge index tensor [2, E] containing (Sender, Receiver) node indices
     """
-    # TODO: Implement connectivity computation
-    raise NotImplementedError("compute_connectivity not implemented yet")
+    # PyTorch Geometric's radius_graph specifically prevents self-loops implicitly
+    # unless max_num_neighbors is met, giving us exactly the graph edge array we need!
+    edge_index = radius_graph(
+        positions, 
+        r=connectivity_radius, 
+        loop=False, 
+        max_num_neighbors=200 # Safety limit to prevent OOM
+    )
+    
+    return edge_index
 
 
 """
