@@ -80,9 +80,7 @@ The GNN simulator follows DeepMind's Encode-Process-Decode architecture:
 
 All parameters are centralized in `config.yaml`:
 
-```markdown
 See [config.yaml](config.yaml).
-```
 
 ## Simulation Types (WIP)
 
