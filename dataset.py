@@ -241,7 +241,6 @@ def _parse_tfrecords(data_path: str) -> Dict[str, List[Dict[str, np.ndarray]]]:
 def compute_connectivity(positions: torch.Tensor, connectivity_radius: float) -> torch.Tensor:
     """
     Compute graph connectivity dynamically based on particle spatial positions.
-    Uses an optimized KDTree search algorithm to find pairs rapidly.
     
     Args:
         positions: Particle positions [N, D]
