@@ -89,7 +89,8 @@ class ParticleDataset(Dataset):
             particle_type=torch.from_numpy(particle_type),
             masses=torch.from_numpy(mass),
             target_acc=torch.from_numpy(target_acc),
-            connectivity_radius=self.metadata.get('default_connectivity_radius', 0.015)
+            connectivity_radius=self.metadata.get('default_connectivity_radius', 0.015),
+            bounds=self.metadata.get('bounds')
         )
 
 
@@ -271,7 +272,8 @@ import torch
 
 
 def build_graph(positions: torch.Tensor, velocities: torch.Tensor, particle_type: torch.Tensor, 
-                masses: torch.Tensor, target_acc: torch.Tensor, connectivity_radius: float) -> Data:
+                masses: torch.Tensor, target_acc: torch.Tensor, connectivity_radius: float,
+                bounds: list = None) -> Data:
     """
     Build a complete PyTorch Geometric Data object from raw particle tensors.
     Extrapolates edge connections and builds pairwise displacement features naturally.
@@ -283,9 +285,28 @@ def build_graph(positions: torch.Tensor, velocities: torch.Tensor, particle_type
     edge_attr = compute_edge_features(positions, edge_index)
     
     # 3. Concatenate all continuous node features into a unified x tensor
-    # Velocities [N, 10] + Masses [N, 1] -> x [N, 11]
+    features = [velocities]
+    
+    # 3a. Spatial boundary tracking clip limits
+    if bounds is not None:
+        bounds_tensor = torch.tensor(bounds, dtype=positions.dtype, device=positions.device)
+        distance_to_lower = positions - bounds_tensor[:, 0]
+        distance_to_upper = bounds_tensor[:, 1] - positions
+        boundary_distances = torch.cat([distance_to_lower, distance_to_upper], dim=-1)
+    else:
+        # If no bounds exist (e.g., N-Body space), pad with infinity (which clamps to max connectivity_radius)
+        # to guarantee the NN tensor sizing stays perfectly aligned.
+        N, spatial_dim = positions.shape
+        boundary_distances = torch.full((N, spatial_dim * 2), float('inf'), dtype=positions.dtype, device=positions.device)
+
+    # Specifically clip to prevent the network from globally locating itself natively
+    boundary_distances = torch.clamp(boundary_distances, min=0.0, max=connectivity_radius)
+    features.append(boundary_distances)
+
+    # Velocities [N, 10] + Boundaries [N, 4] + Masses [N, 1] -> x [N, 15]
     safe_masses = masses.unsqueeze(-1) if masses.dim() == 1 else masses
-    x_features = torch.cat([velocities, safe_masses], dim=-1)
+    features.append(safe_masses)
+    x_features = torch.cat(features, dim=-1)
     
     return Data(
         pos=positions,

@@ -75,8 +75,8 @@ class GNNSimulator(nn.Module):
         history_window = data_cfg['history_window']
         
         # Calculate dynamic tensor sizes!
-        # Node features: (Velocity history frames * Dimension) + Scalar Mass
-        node_features = (history_window * spatial_dim) + 1
+        # Node features: (Velocity history frames * Dimension) + Scalar Mass + Bounds (spatial_dim * 2)
+        node_features = (history_window * spatial_dim) + (spatial_dim * 2) + 1
         
         # Edge features: Relative directional displacement vector + Scalar absolute length
         edge_features = spatial_dim + 1
