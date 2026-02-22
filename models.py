@@ -215,7 +215,9 @@ class InteractionNetwork(MessagePassing):
         edge_attr = edge_attr + updated_edges
         
         # 2. Aggregate forces and Evaluate Node Function
-        aggregated_messages = self.propagate(edge_index, updated_edges=edge_attr)
+        # We explicitly pass size=(N, N) so that even if a node has no incoming edges (e.g. isolated droplet),
+        # its aggregated force matrix correctly initializes as all zeros instead of crashing the dimension scatter
+        aggregated_messages = self.propagate(edge_index, size=(x.size(0), x.size(0)), updated_edges=edge_attr)
         
         node_inputs = torch.cat([x, aggregated_messages], dim=-1)
         updated_nodes = self.node_mlp(node_inputs)
