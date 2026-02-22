@@ -54,26 +54,22 @@ class NBodySimulation:
             velocity_scale: Scale for initial velocities
             mass_range: Range for random masses (min, max)
         """
-        self.positions = np.random.uniform(-position_scale, position_scale, (self.num_particles, 3))
-        self.velocities = np.random.uniform(-velocity_scale, velocity_scale, (self.num_particles, 3))
+        self.positions = np.random.uniform(-position_scale, position_scale, (self.num_particles, 2))
+        self.velocities = np.random.uniform(-velocity_scale, velocity_scale, (self.num_particles, 2))
         self.masses = np.random.uniform(mass_range[0], mass_range[1], self.num_particles)
-
-        #Initialize to 2D
-        self.positions[:, 2] = 0.0
-        self.velocities[:, 2] = 0.0
     
     def compute_gravitational_forces(self, positions: np.ndarray, masses: np.ndarray) -> np.ndarray:
         """
         Compute gravitational forces between all particles.
         
         Args:
-            positions: Particle positions [N, 3]
+             positions: Particle positions [N, D]
             masses: Particle masses [N]
             
         Returns:
-            Accelerations [N, 3]
+             Accelerations [N, D]
         """
-        # Displacement vectors between all pairs [N, N, 3]
+        # Displacement vectors between all pairs [N, N, D]
         # r[i, j, :] is the vector from particle i to particle j
         r = positions[np.newaxis, :, :] - positions[:, np.newaxis, :]
         
@@ -120,8 +116,9 @@ class NBodySimulation:
         
         # Arrays to store the history
         num_saved = (total_steps // save_every) + 1
-        history_positions = np.zeros((num_saved, self.num_particles, 3))
-        history_velocities = np.zeros((num_saved, self.num_particles, 3))
+        dim = self.positions.shape[1]
+        history_positions = np.zeros((num_saved, self.num_particles, dim))
+        history_velocities = np.zeros((num_saved, self.num_particles, dim))
         history_times = np.zeros(num_saved)
         
         # Extract current state to iterate over
@@ -216,17 +213,13 @@ class FluidSimulation:
         mass_range: Tuple[float, float] = (1.0, 1.0)
     ):
         """Initializes a clustered 'Water Drop' layout near the top of the box."""
-        self.positions = np.zeros((self.num_particles, 3))
+        self.positions = np.zeros((self.num_particles, 2))
         # Cluster at the top of the screen forming a drop width 0.5 * scale
         self.positions[:, 0] = np.random.uniform(-position_scale * 0.5, position_scale * 0.5, self.num_particles)
         # Cluster near the top edge Y in [0.5, 0.9] of the box!
         self.positions[:, 1] = np.random.uniform(position_scale * 0.5, position_scale * 0.9, self.num_particles)
         
-        # Enforce exactly 2D coordinate projections
-        self.positions[:, 2] = 0.0
-        
-        self.velocities = np.random.uniform(-velocity_scale, velocity_scale, (self.num_particles, 3))
-        self.velocities[:, 2] = 0.0
+        self.velocities = np.random.uniform(-velocity_scale, velocity_scale, (self.num_particles, 2))
         
         self.masses = np.random.uniform(mass_range[0], mass_range[1], self.num_particles)
 
@@ -278,8 +271,9 @@ class FluidSimulation:
     def simulate(self, total_time: float, dt: float, save_every: int = 1) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         total_steps = int(total_time / dt)
         num_saved = (total_steps // save_every) + 1
-        history_positions = np.zeros((num_saved, self.num_particles, 3))
-        history_velocities = np.zeros((num_saved, self.num_particles, 3))
+        dim = self.positions.shape[1]
+        history_positions = np.zeros((num_saved, self.num_particles, dim))
+        history_velocities = np.zeros((num_saved, self.num_particles, dim))
         history_times = np.zeros(num_saved)
         
         pos = self.positions.copy()
@@ -382,6 +376,7 @@ def generate_dataset(
     simulation_type = simulation_kwargs.get('type', 'n_body')
     gravitational_constant = simulation_kwargs.get('gravitational_constant', 1.0)
     softening_length = simulation_kwargs.get('softening_length', 0.01)
+    connectivity_radius = simulation_kwargs.get('connectivity_radius', 0.015)
     
     position_scale = simulation_kwargs.get('position_scale', 1.0)
     velocity_scale = simulation_kwargs.get('velocity_scale', 0.1)
@@ -430,13 +425,21 @@ def generate_dataset(
         
     dataset = {'trajectories': trajectories}
     
+    # Determine correct bounds based on simulation type
+    if simulation_type == 'fluid':
+        bounds = [[-position_scale, position_scale] for _ in range(2)]
+    else:
+        bounds = None  # N-Body has no walls
+    
     if save_path:
-        save_dataset(dataset, save_path, dt * save_every)
+        save_dataset(dataset, save_path, dt * save_every,
+                     bounds=bounds, connectivity_radius=connectivity_radius)
         
     return dataset
 
 
-def save_dataset(dataset: Dict[str, Any], save_path: str, save_dt: float):
+def save_dataset(dataset: Dict[str, Any], save_path: str, save_dt: float,
+                 bounds: list = None, connectivity_radius: float = 0.015):
     """
     Save dataset to disk in NPZ format along with metadata.json.
     
@@ -444,6 +447,8 @@ def save_dataset(dataset: Dict[str, Any], save_path: str, save_dt: float):
         dataset: Dataset dictionary containing list of trajectories
         save_path: Path to save directory
         save_dt: The time delta between saved frames (dt * save_every)
+        bounds: Simulation domain bounds per axis, or None for unbounded sims
+        connectivity_radius: Graph connectivity radius for the model
     """
     os.makedirs(save_path, exist_ok=True)
     
@@ -453,11 +458,9 @@ def save_dataset(dataset: Dict[str, Any], save_path: str, save_dt: float):
     trajectories = dataset['trajectories']
     dim = trajectories[0]['position'].shape[-1]
     
-    # Compute global kinematic stats across the dataset for the metadata.json
+    # Compute global kinematic stats using the actual stored velocities
     for traj in trajectories:
-        pos = traj['position']
-        # Compute derived velocities and accelerations for normalization (like DeepMind)
-        vel = pos[1:] - pos[:-1]
+        vel = traj['velocity']  # Use real integrator velocities, not position deltas
         acc = vel[1:] - vel[:-1]
         
         all_vels.append(vel.reshape(-1, dim))
@@ -467,9 +470,9 @@ def save_dataset(dataset: Dict[str, Any], save_path: str, save_dt: float):
     all_accs = np.concatenate(all_accs, axis=0)
     
     metadata = {
-        "bounds": [[-5.0, 5.0] for _ in range(dim)], 
+        "bounds": bounds,  # None for N-Body (no walls), [[lo, hi], ...] for Fluid
         "sequence_length": trajectories[0]['position'].shape[0],
-        "default_connectivity_radius": 1.0,
+        "default_connectivity_radius": connectivity_radius,
         "dim": dim,
         "dt": save_dt,
         "vel_mean": all_vels.mean(axis=0).tolist(),
