@@ -41,6 +41,26 @@ class GNNSimulator(nn.Module):
         """
         super().__init__()
         
+        self.node_features = node_features
+        self.edge_features = edge_features
+        
+        # 1. Initialize Dynamic Normalizers
+        # Node features (velocity history + mass, etc)
+        self.node_normalizer = Normalizer(size=node_features)
+        # Edge features (relative displacement vector + distance magnitude)
+        self.edge_normalizer = Normalizer(size=edge_features)
+        # Target acceleration normalizer (output)
+        self.output_normalizer = Normalizer(size=output_dim)
+        
+        self.encoder_node = NodeEncoder(node_features, num_particle_types, particle_emb_dim, hidden_dim, hidden_dim)
+        self.encoder_edge = EdgeEncoder(edge_features, hidden_dim, hidden_dim)
+        
+        self.processor = nn.ModuleList([
+            InteractionNetwork(hidden_dim) for _ in range(num_message_passing_steps)
+        ])
+        
+        self.decoder = Decoder(hidden_dim, hidden_dim, output_dim)
+        
     @classmethod
     def from_config(cls, config: Dict[str, Any]) -> 'GNNSimulator':
         """
@@ -70,26 +90,6 @@ class GNNSimulator(nn.Module):
             num_particle_types=9, # Default across DeepMind datasets
             particle_emb_dim=16
         )
-        
-        self.node_features = node_features
-        self.edge_features = edge_features
-        
-        # 1. Initialize Dynamic Normalizers
-        # Node features (velocity history + mass, etc)
-        self.node_normalizer = Normalizer(size=node_features)
-        # Edge features (relative displacement vector + distance magnitude)
-        self.edge_normalizer = Normalizer(size=edge_features)
-        # Target acceleration normalizer (output)
-        self.output_normalizer = Normalizer(size=output_dim)
-        
-        self.encoder_node = NodeEncoder(node_features, num_particle_types, particle_emb_dim, hidden_dim, hidden_dim)
-        self.encoder_edge = EdgeEncoder(edge_features, hidden_dim, hidden_dim)
-        
-        self.processor = nn.ModuleList([
-            InteractionNetwork(hidden_dim) for _ in range(num_message_passing_steps)
-        ])
-        
-        self.decoder = Decoder(hidden_dim, hidden_dim, output_dim)
     
     def forward(self, graph) -> torch.Tensor:
         """
