@@ -40,17 +40,20 @@ def train_step(model, batch, optimizer, device):
     
     optimizer.zero_grad()
     
-    # Forward Pass
-    predictions = model(batch)
+    # 1. Forward Pass (Returns physical dimensions)
+    physical_predictions = model(batch)
     
-    # Calculate Loss (Predictions are dimensionless un-normalized tensors)
-    loss = compute_loss(predictions, batch.y)
+    # 2. Normalize the ground truth and strictly ACCUMULATE test statistics
+    normalized_targets = model.output_normalizer(batch.y, accumulate=True)
+    
+    # 3. Re-cast physical predictions back into normalized latent space exactly aligned to targets
+    normalized_predictions = model.output_normalizer(physical_predictions, accumulate=False)
+    
+    # Calculate Loss strictly in dimension-less normalized parameters
+    loss = compute_loss(normalized_predictions, normalized_targets)
     
     # Backward Pass
     loss.backward()
-    
-    # Potentially clip gradients to prevent exploding forces (not used in original paper)
-    # torch.nn.utils.clip_grad_norm_(model.parameters(), clip_val)
     
     optimizer.step()
     
@@ -65,8 +68,13 @@ def validate(model, val_loader, device):
     
     for batch in val_loader:
         batch = batch.to(device)
-        predictions = model(batch)
-        loss = compute_loss(predictions, batch.y)
+        physical_predictions = model(batch)
+        
+        # Compare geometrically in the latent space WITHOUT accumulating training statistics
+        normalized_targets = model.output_normalizer(batch.y, accumulate=False)
+        normalized_predictions = model.output_normalizer(physical_predictions, accumulate=False)
+        
+        loss = compute_loss(normalized_predictions, normalized_targets)
         
         total_loss += loss.item()
         num_batches += 1
