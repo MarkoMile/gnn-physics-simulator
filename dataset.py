@@ -282,11 +282,16 @@ def build_graph(positions: torch.Tensor, velocities: torch.Tensor, particle_type
     # 2. Extract edge distance representations
     edge_attr = compute_edge_features(positions, edge_index)
     
+    # 3. Concatenate all continuous node features into a unified x tensor
+    # Velocities [N, 10] + Masses [N, 1] -> x [N, 11]
+    safe_masses = masses.unsqueeze(-1) if masses.dim() == 1 else masses
+    x_features = torch.cat([velocities, safe_masses], dim=-1)
+    
     return Data(
         pos=positions,
-        x=velocities, 
+        x=x_features, 
         particle_type=particle_type,
-        mass=masses.unsqueeze(-1) if masses.dim() == 1 else masses,
+        mass=safe_masses,
         y=target_acc, 
         edge_index=edge_index,
         edge_attr=edge_attr
