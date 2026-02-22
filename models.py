@@ -41,6 +41,36 @@ class GNNSimulator(nn.Module):
         """
         super().__init__()
         
+    @classmethod
+    def from_config(cls, config: Dict[str, Any]) -> 'GNNSimulator':
+        """
+        Instantiate the GNNSimulator dynamically from the loaded project config.yaml dictionary.
+        Automatically mathematically derives the matrix sizing constraints from sequence lengths and dimensionality.
+        """
+        model_cfg = config['model']
+        data_cfg = config['data']
+        
+        # Dimensions
+        spatial_dim = data_cfg['spatial_dim']
+        history_window = data_cfg['history_window']
+        
+        # Calculate dynamic tensor sizes!
+        # Node features: (Velocity history frames * Dimension) + Scalar Mass
+        node_features = (history_window * spatial_dim) + 1
+        
+        # Edge features: Relative directional displacement vector + Scalar absolute length
+        edge_features = spatial_dim + 1
+        
+        return cls(
+            node_features=node_features,
+            edge_features=edge_features,
+            hidden_dim=model_cfg.get('hidden_dim', 128),
+            num_message_passing_steps=model_cfg.get('message_passing_steps', 10),
+            output_dim=spatial_dim,
+            num_particle_types=9, # Default across DeepMind datasets
+            particle_emb_dim=16
+        )
+        
         self.node_features = node_features
         self.edge_features = edge_features
         
