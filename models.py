@@ -9,6 +9,86 @@ import torch
 import torch.nn as nn
 from typing import Dict, Any, Optional
 
+class GNNSimulator(nn.Module):
+    """
+    Graph Neural Network for simulating particle dynamics.
+    
+    Architecture:
+    1. Encoder: Embeds node and edge features
+    2. Processor: Multiple message passing steps
+    3. Decoder: Predicts accelerations/next state
+    """
+    
+    def __init__(
+        self,
+        node_features: int,
+        edge_features: int,
+        hidden_dim: int,
+        num_message_passing_steps: int,
+        output_dim: int,
+        num_particle_types: int = 9,
+        particle_emb_dim: int = 16
+    ):
+        """
+        Initialize the GNN Simulator.
+        
+        Args:
+            node_features: Input node feature dimension
+            edge_features: Input edge feature dimension
+            hidden_dim: Hidden layer dimension
+            num_message_passing_steps: Number of message passing iterations
+            output_dim: Output dimension (typically 3 for acceleration)
+        """
+        super().__init__()
+        
+        self.node_features = node_features
+        self.edge_features = edge_features
+        
+        # 1. Initialize Dynamic Normalizers
+        # Node features (velocity history + mass, etc)
+        self.node_normalizer = Normalizer(size=node_features)
+        # Edge features (relative displacement vector + distance magnitude)
+        self.edge_normalizer = Normalizer(size=edge_features)
+        # Target acceleration normalizer (output)
+        self.output_normalizer = Normalizer(size=output_dim)
+        
+        self.encoder_node = NodeEncoder(node_features, num_particle_types, particle_emb_dim, hidden_dim, hidden_dim)
+        self.encoder_edge = EdgeEncoder(edge_features, hidden_dim, hidden_dim)
+        
+        self.processor = nn.ModuleList([
+            InteractionNetwork(hidden_dim) for _ in range(num_message_passing_steps)
+        ])
+        
+        self.decoder = Decoder(hidden_dim, hidden_dim, output_dim)
+    
+    def forward(self, graph) -> torch.Tensor:
+        """
+        Forward pass through the simulator mapping states to output accelerations.
+        """
+        # 1. Normalize graph physical inputs dynamically
+        normalized_nodes = self.node_normalizer(graph.x, accumulate=self.training)
+        normalized_edges = self.edge_normalizer(graph.edge_attr, accumulate=self.training)
+        
+        # 2. Encode inputs to 128-D latents
+        x = self.encoder_node(normalized_nodes, graph.particle_type)
+        edge_attr = self.encoder_edge(normalized_edges)
+        
+        # 3. Processor: M message passing rounds
+        for layer in self.processor:
+            x, edge_attr = layer(x, graph.edge_index, edge_attr)
+            
+        # 4. Decode node latents to raw dimensionless predictions
+        predicted_accelerations = self.decoder(x)
+        
+        # 5. Inverse normalize yielding physical m/s^2 matrices
+        return self.output_normalizer.inverse(predicted_accelerations)
+
+"""
+Normalizer module.
+
+This module implements a normalizer for graph neural networks.
+"""
+
 class Normalizer(nn.Module):
     """
     Dynamically tracks the mean and variance of node/edge features 
@@ -62,64 +142,6 @@ class Normalizer(nn.Module):
         safe_variance = torch.clamp(variance, min=0.0)
         return torch.sqrt(safe_variance + self.epsilon)
 
-class GNNSimulator(nn.Module):
-    """
-    Graph Neural Network for simulating particle dynamics.
-    
-    Architecture:
-    1. Encoder: Embeds node and edge features
-    2. Processor: Multiple message passing steps
-    3. Decoder: Predicts accelerations/next state
-    """
-    
-    def __init__(
-        self,
-        node_features: int,
-        edge_features: int,
-        hidden_dim: int,
-        num_message_passing_steps: int,
-        output_dim: int
-    ):
-        """
-        Initialize the GNN Simulator.
-        
-        Args:
-            node_features: Input node feature dimension
-            edge_features: Input edge feature dimension
-            hidden_dim: Hidden layer dimension
-            num_message_passing_steps: Number of message passing iterations
-            output_dim: Output dimension (typically 3 for acceleration)
-        """
-        super().__init__()
-        
-        self.node_features = node_features
-        self.edge_features = edge_features
-        
-        # 1. Initialize Dynamic Normalizers
-        # Node features (velocity history + mass, etc)
-        self.node_normalizer = Normalizer(size=node_features)
-        # Edge features (relative displacement vector + distance magnitude)
-        self.edge_normalizer = Normalizer(size=edge_features)
-        # Target acceleration normalizer (output)
-        self.output_normalizer = Normalizer(size=output_dim)
-        
-        # TODO: Initialize Encoder, Processor, and Decoder networks
-    
-    def forward(self, graph):
-        """
-        Forward pass through the simulator.
-        
-        Args:
-            graph: Input graph with node and edge features
-            
-        Returns:
-            Predicted accelerations for each particle
-        """
-        # TODO: Normalize graph node and edge inputs
-        # normalized_nodes = self.node_normalizer(graph.x, accumulate=self.training)
-        # ... forward pass ...
-        
-        raise NotImplementedError("forward not implemented yet")
 
 
 """
@@ -131,62 +153,51 @@ for graph neural networks.
 
 import torch
 import torch.nn as nn
+from torch_geometric.nn import MessagePassing
+from typing import Tuple
 
 
-class MessagePassingLayer(nn.Module):
-    """
-    Basic message passing layer.
-    
-    Implements:
-    1. Message computation on edges
-    2. Message aggregation at nodes
-    3. Node update
-    """
-    
-    def __init__(self, node_dim: int, edge_dim: int, hidden_dim: int):
-        """
-        Initialize message passing layer.
-        
-        Args:
-            node_dim: Node feature dimension
-            edge_dim: Edge feature dimension
-            hidden_dim: Hidden layer dimension
-        """
-        super().__init__()
-        # TODO: Implement layer initialization
-        raise NotImplementedError("MessagePassingLayer not implemented yet")
-    
-    def forward(self, node_features, edge_features, edge_index):
-        """
-        Forward pass through message passing layer.
-        
-        Args:
-            node_features: Node features [N, F_n]
-            edge_features: Edge features [E, F_e]
-            edge_index: Edge connectivity [2, E]
-            
-        Returns:
-            Updated node features
-        """
-        # TODO: Implement message passing
-        raise NotImplementedError("forward not implemented yet")
-
-
-class InteractionNetwork(nn.Module):
+class InteractionNetwork(MessagePassing):
     """
     Interaction Network layer for physics simulation.
-    
-    Based on "Interaction Networks for Learning about Objects,
-    Relations and Physics" (Battaglia et al., 2016)
+    Uses PyTorch Geometric's MessagePassing abstraction to compute forces seamlessly.
     """
-    
-    def __init__(self, node_dim: int, edge_dim: int, hidden_dim: int):
-        super().__init__()
-        # TODO: Implement Interaction Network
-        raise NotImplementedError("InteractionNetwork not implemented yet")
-    
-    def forward(self, node_features, edge_features, edge_index):
-        raise NotImplementedError("forward not implemented yet")
+    def __init__(self, hidden_dim: int):
+        super().__init__(aggr='add') # Forces aggregate cumulatively at receiving nodes
+        
+        # Edge update network
+        # Combines sender node, receiver node, and edge feature back into a latent edge
+        self.edge_mlp = build_mlp(hidden_dim * 3, hidden_dim, hidden_dim, layernorm=True)
+        
+        # Node update network
+        # Combines original node feature with aggregated incoming messages
+        self.node_mlp = build_mlp(hidden_dim * 2, hidden_dim, hidden_dim, layernorm=True)
+        
+    def forward(self, x: torch.Tensor, edge_index: torch.Tensor, edge_attr: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        senders, receivers = edge_index[0], edge_index[1]
+        
+        # 1. Evaluate Edge function
+        # Concat [sending_node, receiving_node, edge_feature]
+        edge_inputs = torch.cat([x[senders], x[receivers], edge_attr], dim=-1)
+        updated_edges = self.edge_mlp(edge_inputs)
+        
+        # Apply residual connection on edges
+        edge_attr = edge_attr + updated_edges
+        
+        # 2. Aggregate forces and Evaluate Node Function
+        aggregated_messages = self.propagate(edge_index, updated_edges=edge_attr)
+        
+        node_inputs = torch.cat([x, aggregated_messages], dim=-1)
+        updated_nodes = self.node_mlp(node_inputs)
+        
+        # Apply residual connection on nodes
+        x = x + updated_nodes
+        
+        return x, edge_attr
+        
+    def message(self, updated_edges: torch.Tensor) -> torch.Tensor:
+        """The message passed along each structural link is simply the updated edge attribute."""
+        return updated_edges
 
 
 """
@@ -200,6 +211,25 @@ import torch
 import torch.nn as nn
 
 
+def build_mlp(input_dim: int, hidden_dim: int, output_dim: int, layernorm: bool = True) -> nn.Sequential:
+    """
+    Builds a standard Multi-Layer Perceptron (MLP) according to DeepMind's specifications.
+    Specifically: Two hidden layers, ReLU activations, linear output, optional LayerNorm.
+    """
+    layers = [
+        nn.Linear(input_dim, hidden_dim),
+        nn.ReLU(),
+        nn.Linear(hidden_dim, hidden_dim),
+        nn.ReLU(),
+        nn.Linear(hidden_dim, output_dim)
+    ]
+    
+    if layernorm:
+        layers.append(nn.LayerNorm(output_dim))
+        
+    return nn.Sequential(*layers)
+
+
 class NodeEncoder(nn.Module):
     """
     Encoder for node features.
@@ -208,22 +238,37 @@ class NodeEncoder(nn.Module):
     to latent representations.
     """
     
-    def __init__(self, input_dim: int, hidden_dim: int, output_dim: int):
+    def __init__(self, node_feature_dim: int, num_particle_types: int, particle_emb_dim: int, hidden_dim: int, output_dim: int):
         """
         Initialize node encoder.
         
         Args:
-            input_dim: Input feature dimension
+            node_feature_dim: Input feature dimension (e.g. historical velocities + mass)
+            num_particle_types: Total distinct physical materials (e.g. 9 for WaterDropSample)
+            particle_emb_dim: Dimensionality for the learned material embedding (usually 16)
             hidden_dim: Hidden layer dimension
-            output_dim: Output latent dimension
+            output_dim: Output latent dimension (usually 128)
         """
         super().__init__()
-        # TODO: Implement encoder
-        raise NotImplementedError("NodeEncoder not implemented yet")
-    
-    def forward(self, x):
-        """Encode node features."""
-        raise NotImplementedError("forward not implemented yet")
+        
+        # DeepMind explicitly embeds the integer material types (Water vs Sand etc) 
+        # into a 16-D continuous dense space so the model can learn material properties.
+        self.particle_embedding = nn.Embedding(num_particle_types, particle_emb_dim)
+        
+        # The MLP will consume both the physical metric features and that mapped material space
+        total_input_dim = node_feature_dim + particle_emb_dim
+        self.mlp = build_mlp(total_input_dim, hidden_dim, output_dim, layernorm=True)
+        
+    def forward(self, node_features: torch.Tensor, particle_types: torch.Tensor) -> torch.Tensor:
+        """Encode node features by combining physical arrays with material embeddings."""
+        # shape [N] -> [N, Emb_Dim]
+        type_embeddings = self.particle_embedding(particle_types)
+        
+        # Merge physical tensors with categorical tensors: shape [N, Features + Emb_Dim]
+        x = torch.cat([node_features, type_embeddings], dim=-1)
+        
+        # Map through MLP into latent bounds [N, Output_Dim]
+        return self.mlp(x)
 
 
 class EdgeEncoder(nn.Module):
@@ -236,11 +281,12 @@ class EdgeEncoder(nn.Module):
     
     def __init__(self, input_dim: int, hidden_dim: int, output_dim: int):
         super().__init__()
-        # TODO: Implement encoder
-        raise NotImplementedError("EdgeEncoder not implemented yet")
-    
-    def forward(self, x):
-        raise NotImplementedError("forward not implemented yet")
+        # Edges just evaluate the spatial displacement directly through an MLP
+        self.mlp = build_mlp(input_dim, hidden_dim, output_dim, layernorm=True)
+        
+    def forward(self, edge_features: torch.Tensor) -> torch.Tensor:
+        """Map edge relative distances to a latent representation"""
+        return self.mlp(edge_features)
 
 
 class Decoder(nn.Module):
@@ -252,10 +298,11 @@ class Decoder(nn.Module):
     
     def __init__(self, input_dim: int, hidden_dim: int, output_dim: int):
         super().__init__()
-        # TODO: Implement decoder
-        raise NotImplementedError("Decoder not implemented yet")
-    
-    def forward(self, x):
-        raise NotImplementedError("forward not implemented yet")
+        # The decoder takes the final processed node latents and maps them to physics vectors
+        self.mlp = build_mlp(input_dim, hidden_dim, output_dim, layernorm=False)
+        
+    def forward(self, node_latents: torch.Tensor) -> torch.Tensor:
+        """Map final node hidden representations into un-normalized physics vectors (accelerations)"""
+        return self.mlp(node_latents)
 
 
