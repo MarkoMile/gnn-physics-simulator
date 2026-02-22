@@ -143,8 +143,6 @@ def train(config_path: str, use_wandb: bool = False):
     # 4. Training Loop Variables
     global_step = 0
     best_val_loss = float('inf')
-    early_stopping_patience = train_cfg.get('early_stopping_patience', 15)
-    patience_counter = 0
     save_dir = "checkpoints"
     os.makedirs(save_dir, exist_ok=True)
     
@@ -191,12 +189,10 @@ def train(config_path: str, use_wandb: bool = False):
                 "val/loss": val_loss
             })
             
-        # 5. Checkpointing & Early Stopping
+        # 5. Checkpoint best model
         if val_loss < best_val_loss:
             best_val_loss = val_loss
-            patience_counter = 0
             
-            # Save the optimal state dictionary! (This captures weights, biases, AND the dynamic normalizer statistics!)
             save_path = os.path.join(save_dir, "best_model.pt")
             torch.save({
                 'epoch': epoch,
@@ -207,13 +203,6 @@ def train(config_path: str, use_wandb: bool = False):
                 'config': config
             }, save_path)
             print(f"--> Saved improved checkpoint to {save_path}")
-        else:
-            patience_counter += 1
-            print(f"--> Validation loss did not improve. Patience: {patience_counter}/{early_stopping_patience}")
-            
-            if patience_counter >= early_stopping_patience:
-                print(f"\nEarly stopping triggered after {patience_counter} epochs without improvement!")
-                break
                 
         if global_step >= max_training_steps:
             break
