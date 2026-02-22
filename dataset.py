@@ -7,7 +7,7 @@ and processing particle trajectory data for GNN training.
 
 import torch
 from torch.utils.data import Dataset
-from torch_geometric.data import Data
+from torch_geometric.data import Data, Batch
 from torch_geometric.nn import radius_graph
 from typing import Dict, Any, List, Optional
 import os
@@ -81,18 +81,15 @@ class ParticleDataset(Dataset):
         # Move N to front, then flatten C and D
         input_vel_flat = input_vel.transpose(1, 0, 2).reshape(N, history_window * D)
         
-        # Calculate dynamic edge connectivity using spatial KDTree!
+        # 6. Return final graph assembly
         pos_tensor = torch.from_numpy(input_pos)
-        edge_index = compute_connectivity(pos_tensor, self.metadata.get('default_connectivity_radius', 0.015))
-        
-        # Return a PyTorch Geometric Data object
-        return Data(
-            pos=pos_tensor,
-            x=torch.from_numpy(input_vel_flat), # Node features (PyG convention uses 'x')
+        return build_graph(
+            positions=pos_tensor,
+            velocities=torch.from_numpy(input_vel_flat),
             particle_type=torch.from_numpy(particle_type),
-            mass=torch.from_numpy(mass).unsqueeze(-1), # Shape [N, 1] for easier concatenation later
-            y=torch.from_numpy(target_acc),     # Target labels (PyG convention uses 'y')
-            edge_index=edge_index
+            masses=torch.from_numpy(mass),
+            target_acc=torch.from_numpy(target_acc),
+            connectivity_radius=self.metadata.get('default_connectivity_radius', 0.015)
         )
 
 
@@ -273,49 +270,57 @@ to graph representations suitable for GNN processing.
 import torch
 
 
-def build_graph(positions, velocities, masses=None, connectivity_radius=None):
+def build_graph(positions: torch.Tensor, velocities: torch.Tensor, particle_type: torch.Tensor, 
+                masses: torch.Tensor, target_acc: torch.Tensor, connectivity_radius: float) -> Data:
     """
-    Build a graph from particle states.
+    Build a complete PyTorch Geometric Data object from raw particle tensors.
+    Extrapolates edge connections and builds pairwise displacement features naturally.
+    """
+    # 1. Evaluate connectivity dynamically using KDTree
+    edge_index = compute_connectivity(positions, connectivity_radius)
     
-    Args:
-        positions: Particle positions [N, 3]
-        velocities: Particle velocities [N, 3]
-        masses: Optional particle masses [N, 1]
-        connectivity_radius: Radius for edge creation (None = fully connected)
-        
-    Returns:
-        Graph data structure with nodes, edges, and features
-    """
-    # TODO: Implement graph construction
-    raise NotImplementedError("build_graph not implemented yet")
-
-
-def compute_edge_features(positions, edge_index):
-    """
-    Compute edge features from particle positions.
+    # 2. Extract edge distance representations
+    edge_attr = compute_edge_features(positions, edge_index)
     
-    Args:
-        positions: Particle positions [N, 3]
-        edge_index: Edge connectivity [2, E]
-        
-    Returns:
-        Edge features [E, F_e]
-    """
-    # TODO: Implement edge feature computation
-    raise NotImplementedError("compute_edge_features not implemented yet")
+    return Data(
+        pos=positions,
+        x=velocities, 
+        particle_type=particle_type,
+        mass=masses.unsqueeze(-1) if masses.dim() == 1 else masses,
+        y=target_acc, 
+        edge_index=edge_index,
+        edge_attr=edge_attr
+    )
 
 
-def batch_graphs(graphs):
+def compute_edge_features(positions: torch.Tensor, edge_index: torch.Tensor) -> torch.Tensor:
     """
-    Batch multiple graphs for parallel processing.
+    Compute complex edge attributes according to DeepMind's GNS framework.
+    Includes both the exact spatial displacement vector and its absolute magnitude (distance).
+    """
+    # edge_index is [2, E] where row 0 is senders, row 1 is receivers
+    senders, receivers = edge_index[0], edge_index[1]
     
-    Args:
-        graphs: List of graph data structures
-        
-    Returns:
-        Batched graph
+    # Calculate directional relative displacement (dx, dy, dz)
+    relative_displacement = positions[senders] - positions[receivers]
+    
+    # Determine the absolute L2 normal distance magnitude (r)
+    # Using keepdim to keep shape [E, 1] instead of [E]
+    distances = torch.linalg.norm(relative_displacement, dim=-1, keepdim=True)
+    
+    # Concatenate to yield robust edge feature vector [E, D + 1]
+    edge_attr = torch.cat([relative_displacement, distances], dim=-1)
+    
+    return edge_attr
+
+
+def batch_graphs(graphs: List[Data]) -> Batch:
     """
-    # TODO: Implement graph batching
-    raise NotImplementedError("batch_graphs not implemented yet")
+    Efficiently stacks a list of independent simulation graphs into one super-graph
+    along the node/edge axis natively utilizing PyTorch Geometric.
+    """
+    # The PyG `Batch` class handles all the tedious incrementing of edge_index connectivity
+    # so distinct clusters don't cross-contaminate forces during matrix multiplication!
+    return Batch.from_data_list(graphs)
 
 
