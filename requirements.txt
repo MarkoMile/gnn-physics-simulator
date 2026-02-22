@@ -1,36 +1,45 @@
 # Core dependencies
-numpy>=1.21.0
-scipy>=1.7.0
-matplotlib>=3.5.0
+numpy
+scipy
+matplotlib
 
 # PyTorch and PyTorch Geometric
-torch>=2.0.0
-torch-geometric>=2.3.0
+# Point to PyTorch wheels for CUDA 12.6 to ensure the main 'torch' library matches the extensions
+--extra-index-url https://download.pytorch.org/whl/cu126
+# Point to PyG wheels for the specific torch+cuda version
+--find-links https://data.pyg.org/whl/torch-2.8.0+cu126.html
+
+torch==2.8.0
+torch-scatter
+torch-sparse
+torch-cluster
+torch-spline-conv
+torch-geometric
 
 # Optional: TFRecord loading from DeepMind datasets
-tensorflow-cpu>=2.10.0
+tensorflow-cpu
 
 # Configuration
-pyyaml>=6.0
-omegaconf>=2.3.0
+pyyaml
+omegaconf
 
 # Logging and visualization
-wandb>=0.15.0
-tqdm>=4.65.0
+wandb
+tqdm
 
 # Jupyter notebooks
-jupyter>=1.0.0
-ipykernel>=6.0.0
+jupyter
+ipykernel
 
 # Testing
-pytest>=7.0.0
-pytest-cov>=4.0.0
+pytest
+pytest-cov
 
 # Development
-black>=23.0.0
-flake8>=6.0.0
-mypy>=1.0.0
-isort>=5.12.0
+black
+flake8
+mypy
+isort
 
 # Optional: Animation
-# ffmpeg-python>=0.2.0
+# ffmpeg-python
