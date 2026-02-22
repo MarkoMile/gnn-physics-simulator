@@ -15,57 +15,77 @@ import numpy as np
 
 class ParticleDataset(Dataset):
     """
-    Dataset for particle simulation trajectories.
+    Dataset for general particle simulations (N-body, Fluid Dynamics, etc).
     
-    Each sample contains:
-    - Particle positions and velocities at time t
-    - Ground truth accelerations or next state at time t+1
+    Handles loading raw sequence data, performing dynamic random-walk noise 
+    injection during training, and building the PyTorch tensors.
     """
     
-    def __init__(self, data_path: str, transform=None):
+    def __init__(self, data_path: str, split: str = 'train', dataset_format: str = 'npz', noise_std: float = 0.0003):
         """
-        Initialize the dataset.
+        Initialize the dataset, load data, and apply dynamic training noise.
+        """
+        raw_data = load_raw_data(data_path, dataset_format=dataset_format)
+        self.metadata = raw_data['metadata']
+        self.trajectories = raw_data['splits'].get(split, [])
+        self.is_training = (split == 'train')
+        self.noise_std = noise_std
         
-        Args:
-            data_path: Path to the processed data directory
-            transform: Optional transform to apply to samples
-        """
-        # TODO: Implement dataset loading
-        raise NotImplementedError("ParticleDataset not implemented yet")
-    
     def __len__(self):
-        # TODO: Return dataset length
-        raise NotImplementedError
+        return len(self.trajectories)
     
     def __getitem__(self, idx):
-        # TODO: Return sample at index
-        raise NotImplementedError
-
-
-class NBodyDataset(Dataset):
-    """
-    Dataset specifically for N-body gravitational simulations.
-    
-    Extends ParticleDataset with N-body specific features
-    like mass handling and gravitational interactions.
-    """
-    
-    def __init__(self, data_path: str, transform=None):
         """
-        Initialize the N-body dataset.
+        Retrieves a trajectory, dynamically deriving input nodes and target accelerations.
+        Injects a random-walk noise pattern on inputs if training.
+        """
+        traj = self.trajectories[idx]
+        pos = traj['position']         # [T, N, D]
+        vel = traj['velocity']         # [T, N, D]
+        particle_type = traj['particle_type'] # [N]
+        mass = traj['mass']            # [N]
         
-        Args:
-            data_path: Path to the processed data directory
-            transform: Optional transform to apply to samples
-        """
-        # TODO: Implement N-body dataset loading
-        raise NotImplementedError("NBodyDataset not implemented yet")
-    
-    def __len__(self):
-        raise NotImplementedError
-    
-    def __getitem__(self, idx):
-        raise NotImplementedError
+        # Deepmind models condition on previous C=5 velocities
+        history_window = 5
+        
+        # Randomly select a valid start timestep 
+        T = pos.shape[0]
+        t = np.random.randint(history_window, T - 1)
+        
+        # Slice the input feature history
+        input_vel = vel[t - history_window:t].copy()  # [C, N, D]
+        input_pos = pos[t - 1].copy()                 # [N, D] (most recent position)
+        
+        target_acc = vel[t] - vel[t-1]
+        
+        if self.is_training and self.noise_std > 0.0:
+            # 1. Generate independent noise for each step in history
+            noise = np.random.normal(loc=0.0, scale=self.noise_std, size=input_vel.shape).astype(np.float32)
+            
+            # 2. Accumulate it as a random walk across the history sequence
+            acc_noise = np.cumsum(noise, axis=0)
+            
+            # 3. Add accumulated noise to the input velocities
+            input_vel += acc_noise
+            
+            # 4. Correct the position to match the shifted final velocity
+            input_pos += acc_noise[-1]
+            
+            # 5. Adjust target acceleration to undo the injected noise!
+            target_acc -= acc_noise[-1]
+        
+        # Flatten history velocities [N, C*D] for MLP input
+        N, D = input_pos.shape
+        # Move N to front, then flatten C and D
+        input_vel_flat = input_vel.transpose(1, 0, 2).reshape(N, history_window * D)
+        
+        return {
+            'pos': torch.from_numpy(input_pos),
+            'vel_history': torch.from_numpy(input_vel_flat),
+            'particle_type': torch.from_numpy(particle_type),
+            'mass': torch.from_numpy(mass),
+            'target_acc': torch.from_numpy(target_acc)
+        }
 
 
 """
@@ -210,20 +230,6 @@ def _parse_tfrecords(data_path: str) -> Dict[str, List[Dict[str, np.ndarray]]]:
         
     return splits
 
-
-def normalize_data(data, stats=None):
-    """
-    Normalize particle positions and velocities.
-    
-    Args:
-        data: Raw particle data
-        stats: Optional precomputed normalization statistics
-        
-    Returns:
-        Normalized data and statistics
-    """
-    # TODO: Implement normalization
-    raise NotImplementedError("normalize_data not implemented yet")
 
 
 def compute_connectivity(positions, connectivity_radius: float):
