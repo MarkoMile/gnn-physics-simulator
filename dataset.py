@@ -32,27 +32,33 @@ class ParticleDataset(Dataset):
         self.trajectories = raw_data['splits'].get(split, [])
         self.is_training = (split == 'train')
         self.noise_std = noise_std
+        self.history_window = 5
+        
+        # Pre-compute a flat index mapping: each index → (trajectory_idx, timestep)
+        # This expands the dataset from "1 sample per trajectory" to
+        # "1 sample per valid timestep per trajectory", matching Stanford/DeepMind.
+        self._flat_index = []
+        for traj_idx, traj in enumerate(self.trajectories):
+            T = traj['position'].shape[0]
+            for t in range(self.history_window, T - 1):
+                self._flat_index.append((traj_idx, t))
         
     def __len__(self):
-        return len(self.trajectories)
+        return len(self._flat_index)
     
     def __getitem__(self, idx):
         """
-        Retrieves a trajectory, dynamically deriving input nodes and target accelerations.
+        Retrieves a specific (trajectory, timestep) pair, deriving input nodes and target accelerations.
         Injects a random-walk noise pattern on inputs if training.
         """
-        traj = self.trajectories[idx]
+        traj_idx, t = self._flat_index[idx]
+        traj = self.trajectories[traj_idx]
         pos = traj['position']         # [T, N, D]
         vel = traj['velocity']         # [T, N, D]
         particle_type = traj['particle_type'] # [N]
         mass = traj['mass']            # [N]
         
-        # Deepmind models condition on previous C=5 velocities
-        history_window = 5
-        
-        # Randomly select a valid start timestep 
-        T = pos.shape[0]
-        t = np.random.randint(history_window, T - 1)
+        history_window = self.history_window
         
         # Slice the input feature history
         input_vel = vel[t - history_window:t].copy()  # [C, N, D]
