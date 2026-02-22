@@ -26,15 +26,15 @@ data:
 # Simulation config (for generating dataset)
 
 simulation:
-  num_trajectories: 100
-  num_particles: 5
-  total_time: 5.0
-  dt: 0.01
-  save_every: 5
+  num_trajectories: 1000      # 1000 train trajectories (Deepmind spec)
+  num_particles: 100         # ~100 particles per volume (maybe 1000 would be better?)
+  total_time: 2.0             # 2.0s real physical time
+  dt: 0.005                   # High precision integration step
+  save_every: 2               # Sub-sample integration to yield length 400 sequences
   integrator: 'rk4'
-  gravitational_constant: 1.0
-  softening_length: 0.1
-  position_scale: 2.0
-  velocity_scale: 0.5
-  mass_range_min: 0.8
-  mass_range_max: 1.2
+  gravitational_constant: 9.8 # Real surface gravity magnitude
+  softening_length: 0.015     # Matching the connectivity radius
+  position_scale: 1.0         # 1m x 1m bounds
+  velocity_scale: 0.0         # Start from rest
+  mass_range_min: 1.0         # Homogeneous material density
+  mass_range_max: 1.0
