@@ -1,70 +1,107 @@
 # GNN Physics Simulator
 
-Graph Neural Network (GNN) simulator for particle dynamics in PyTorch; Extension to generate a custom gravitational N-body dataset using classical numerical integrators.
-
-Inspired by Stanford CS224W blog post: https://medium.com/stanford-cs224w/simulating-complex-physics-with-graph-networks-step-by-step-177354cb9b05
+A PyTorch Geometric implementation of [Learning to Simulate Complex Physics with Graph Networks](https://arxiv.org/abs/2002.09405) (Sanchez-Gonzalez et al., 2020). Trains a Graph Neural Network to predict particle accelerations from local interactions, reproducing DeepMind's architecture for simulating fluids, rigid bodies, and gravitational systems.
 
 ## Project Structure
 
-A minimal project layout featuring two primary notebooks using independent Python modules.
-
 ```
 gnn-physics-simulator/
-├── Project.ipynb       # Main project notebook (theory, model definition, training)
-├── TestSim.ipynb       # Testing/visualization for the N-Body numerical simulation
-├── simulation.py       # Core N-Body generator
-├── integrators.py      # Euler, RK4, Leapfrog, and Verlet integrators
-├── models.py           # PyTorch GNN components
-└── dataset.py          # PyTorch Geometric dataset generation
+├── config.yaml              # Central configuration (model, training, data, simulation)
+├── models.py                # GNNSimulator: Encoder → Processor → Decoder architecture
+├── dataset.py               # ParticleDataset: TFRecord/NPZ loading, noise injection, graph building
+├── train.py                 # Training loop: normalized loss, LR decay, checkpointing
+├── simulation.py            # N-Body & Fluid (pseudo-SPH) generators with dataset export
+├── integrators.py           # Euler, RK4 numerical integrators
+├── scripts/
+│   ├── generate_dataset.py  # CLI to generate synthetic datasets from config.yaml
+│   └── download_dataset.py  # Download DeepMind datasets (WaterDrop, etc.)
+├── utils/
+│   ├── train_kaggle.ipynb           # Kaggle notebook: train on full WaterDrop dataset
+│   └── train_generated_kaggle.ipynb # Kaggle notebook: generate + train synthetic data
+├── Project.ipynb            # Project presentation notebook
+├── TestSim.ipynb            # N-Body simulation testing and visualization
+└── data/                    # Dataset directory (WaterDrop, WaterDropSample, generated)
 ```
 
 ## Installation
 
 ```bash
-# Clone the repository
-git clone https://github.com/yourusername/gnn-physics-simulator.git
+git clone https://github.com/MarkoMile/gnn-physics-simulator.git
 cd gnn-physics-simulator
 
-# Create virtual environment
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+python -m venv .venv
+source .venv/bin/activate
 
-# Install dependencies
 pip install -r requirements.txt
 ```
 
 ## Quick Start
-Open `Project.ipynb` in your IDE or Jupyter interface to explore the project presentation, execute dataset generation, and train or load the primary GNN model. Alternatively, exploring the `TestSim.ipynb` notebook provides isolated visualization boundaries for tracking energy conservation of the ground-truth integration methods.
 
-## Numerical Integrators
+### Train on DeepMind's WaterDrop Dataset
 
-The project implements the following numerical integrators for generating training data:
+```bash
+# 1. Download the WaterDrop dataset
+python scripts/download_dataset.py
 
-- **Euler**: First-order explicit method
-- **RK4**: Fourth-order Runge-Kutta method
-- **Leapfrog**: Symplectic integrator (Störmer-Verlet) (TODO: implement)
-- **Verlet**: Velocity Verlet integrator (TODO: implement)
+# 2. Train the model
+python train.py --config config.yaml
 
+# With Weights & Biases logging:
+python train.py --config config.yaml --wandb
+```
+
+### Generate and Train on Synthetic Data (WIP)
+
+```bash
+# Generate an N-Body or Fluid dataset from config.yaml
+python scripts/generate_dataset.py --config config.yaml --output data/Generated
+
+# Train on the generated data (set dataset_path and dataset_format in config.yaml)
+python train.py --config config.yaml
+```
+
+### Train on Kaggle (GPU)
+
+Upload `utils/train_kaggle.ipynb` to Kaggle for GPU-accelerated training on the full WaterDrop dataset, or `utils/train_generated_kaggle.ipynb` to generate and train on synthetic data.
 
 ## Model Architecture
 
-The GNN simulator follows the Interaction Network architecture:
+The GNN simulator follows DeepMind's Encode-Process-Decode architecture:
 
-1. **Encoder**: Embeds particle features (position, velocity, mass) to latent space
-2. **Processor**: Multiple message passing steps to propagate information
-3. **Decoder**: Predicts accelerations from latent node representations
+1. **Encoder**: Embeds node features (velocity history, boundary distances, mass, particle type) and edge features (relative displacement, distance) into 128-D latent vectors via 3-layer MLPs with LayerNorm.
+2. **Processor**: 10 sequential `InteractionNetwork` message passing blocks with residual connections on both nodes and edges, using sum aggregation.
+3. **Decoder**: Projects latent node states to predicted accelerations (no LayerNorm).
+
+**Important features matching the paper:**
+- Dynamic online normalization of inputs and outputs
+- Random-walk noise injection during training
+
+## Configuration
+
+All parameters are centralized in `config.yaml`:
+
+```markdown
+See [config.yaml](config.yaml).
+```
+
+## Simulation Types (WIP)
+
+The dataset generator supports two simulation types via `config.yaml`:
+
+- **`n_body`**: Gravitational N-body simulation with softened Newtonian forces
+- **`fluid`**: Pseudo-SPH fluid with downward gravity, inter-particle repulsion, and rigid bounding box walls
 
 ## References
 
-- [Learning to Simulate Complex Physics with Graph Networks](https://arxiv.org/abs/2002.09405)
+- [Learning to Simulate Complex Physics with Graph Networks](https://arxiv.org/abs/2002.09405) — Sanchez-Gonzalez et al., 2020
 - [Interaction Networks for Learning about Objects, Relations and Physics](https://arxiv.org/abs/1612.00222)
-- [Stanford CS224W Blog Post](https://medium.com/stanford-cs224w/simulating-complex-physics-with-graph-networks-step-by-step-177354cb9b05)
-- [PyTorch Geometric](https://pytorch-geometric.readthedocs.io/)
+- [Stanford CS224W: Simulating Complex Physics with Graph Networks](https://medium.com/stanford-cs224w/simulating-complex-physics-with-graph-networks-step-by-step-177354cb9b05)
+- [PyTorch Geometric Documentation](https://pytorch-geometric.readthedocs.io/)
 
 ## Notes
 
-This project was done as an optional project for the course Numerical Algorithms and Numerical Software (E231) at the Faculty of Technical Sciences, University of Novi Sad.
+This project was developed as an optional project for the course Numerical Algorithms and Numerical Software (E231) at the Faculty of Technical Sciences, University of Novi Sad.
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details
+This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
