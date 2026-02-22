@@ -7,6 +7,7 @@ and processing particle trajectory data for GNN training.
 
 import torch
 from torch.utils.data import Dataset
+from torch_geometric.data import Data
 from torch_geometric.nn import radius_graph
 from typing import Dict, Any, List, Optional
 import os
@@ -84,14 +85,15 @@ class ParticleDataset(Dataset):
         pos_tensor = torch.from_numpy(input_pos)
         edge_index = compute_connectivity(pos_tensor, self.metadata.get('default_connectivity_radius', 0.015))
         
-        return {
-            'pos': pos_tensor,
-            'vel_history': torch.from_numpy(input_vel_flat),
-            'particle_type': torch.from_numpy(particle_type),
-            'mass': torch.from_numpy(mass),
-            'target_acc': torch.from_numpy(target_acc),
-            'edge_index': edge_index
-        }
+        # Return a PyTorch Geometric Data object
+        return Data(
+            pos=pos_tensor,
+            x=torch.from_numpy(input_vel_flat), # Node features (PyG convention uses 'x')
+            particle_type=torch.from_numpy(particle_type),
+            mass=torch.from_numpy(mass).unsqueeze(-1), # Shape [N, 1] for easier concatenation later
+            y=torch.from_numpy(target_acc),     # Target labels (PyG convention uses 'y')
+            edge_index=edge_index
+        )
 
 
 """
