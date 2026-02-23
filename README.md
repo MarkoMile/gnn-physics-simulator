@@ -18,8 +18,10 @@ gnn-physics-simulator/
 ├── utils/
 │   ├── train_kaggle.ipynb           # Kaggle notebook: train on full WaterDrop dataset
 │   └── train_generated_kaggle.ipynb # Kaggle notebook: generate + train synthetic data
-├── Project.ipynb            # Project presentation notebook
-├── TestSim.ipynb            # N-Body simulation testing and visualization
+├── notebooks/
+│   ├── Project.ipynb                # Project presentation notebook
+│   ├── TestSim.ipynb                # N-Body simulation testing and visualization
+│   └── Visualize.ipynb              # Rollout visualization: predicted vs ground truth
 └── data/                    # Dataset directory (WaterDrop, WaterDropSample, generated)
 ```
 
