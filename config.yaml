@@ -8,7 +8,7 @@ model:
   activation: 'relu'
 
 training:
-  epochs: 2
+  epochs: 1
   batch_size: 2
   learning_rate: 1.0e-4
   lr_decay_rate: 0.1
