@@ -131,7 +131,7 @@ class NBodySimulation:
             return self.compute_gravitational_forces(positions_array, self.masses)
             
         save_idx = 0
-        from tqdm import tqdm
+        from tqdm.auto import tqdm
         for step in tqdm(range(total_steps + 1), desc="N-Body Simulation Progress", leave=False):
             # Save current state
             if step % save_every == 0:
@@ -276,20 +276,30 @@ class FluidSimulation:
         mass_range: Tuple[float, float] = (1.0, 1.0) # Uniform mass in fluid
     ):
         """Initializes a uniform clustered 'Water Drop' layout near the top of the box."""
-        # Calculate optimal uniform spacing to satisfy rest_density
-        # We want density = rest_density initially. 
-        # In 2D, density ~ m / spacing^2. So spacing = sqrt(m / rest_density).
-        # We target a specific drop area and arrange particles uniformly.
+        # Calculate optimal uniform spacing to satisfy rest_density mathematically
+        # In SPH, fluid particles must spawn at a specific spacing relative to h 
+        # to ensure the initial density evaluates to rest_density (not overlapping, not a void).
+        spacing = self.smoothing_length / 1.2
         
-        # approximate area based on position_scale limits
-        width = position_scale * 0.4
-        height = position_scale * 0.4
+        # Enforce maximum particle volume safety threshold
+        # Evaluate how much area the set of particles will logically occupy
+        # based on geometry vs maximum available container space.
+        required_area = self.num_particles * (spacing ** 2)
+        total_container_area = (2.0 * position_scale) ** 2
+        max_allowed_area = 0.90 * total_container_area
+        
+        if required_area > max_allowed_area:
+            raise ValueError(
+                f"Fluid Initialization Error: Particles require {required_area:.2f} fluid area based on h={self.smoothing_length}, "
+                f"which exceeds the 90% container limit of {max_allowed_area:.2f}. "
+                f"Reduce num_particles or decrease softening_length."
+            )
         
         # Calculate grid dimensions ensuring N particles fit
-        cols = int(np.sqrt(self.num_particles * (width / height)))
+        # Rather than squeezing into a hardcoded 0.4 box, we arrange them naturally
+        # taking as much space as the density requires.
+        cols = int(np.sqrt(self.num_particles))
         rows = int(np.ceil(self.num_particles / cols))
-        
-        spacing = min(width / cols, height / rows)
         
         self.positions = np.zeros((self.num_particles, 2))
         
@@ -425,7 +435,7 @@ class FluidSimulation:
             return self.compute_forces(positions_array, vel, self.masses, dt_step)
             
         save_idx = 0
-        from tqdm import tqdm
+        from tqdm.auto import tqdm
         for step in tqdm(range(total_steps + 1), desc="Fluid Simulation Progress", leave=False):
             if step % save_every == 0:
                 history_positions[save_idx] = pos
@@ -499,7 +509,7 @@ def generate_dataset(
     Returns:
         Dictionary containing trajectories with positions, types, masses, etc.
     """
-    from tqdm import tqdm
+    from tqdm.auto import tqdm
     
     simulation_type = simulation_kwargs.get('type', 'n_body')
     gravitational_constant = simulation_kwargs.get('gravitational_constant', 1.0)
