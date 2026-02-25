@@ -197,8 +197,8 @@ class FluidSimulation:
     def __init__(
         self,
         num_particles: int,
-        gravitational_constant: float = 9.8,
-        softening_length: float = 0.07, # Acts as the SPH Smoothing Length (h)
+        gravitational_constant: float = 9.81,
+        softening_length: float = 0.1, # Acts as the SPH Smoothing Length (h)
         integrator: str = 'symplectic_euler', # Crucial: SPH stability depends on Symplectic Euler
         position_scale: float = 1.0,
         # WCSPH specific parameters
@@ -279,7 +279,7 @@ class FluidSimulation:
         # Calculate optimal uniform spacing to satisfy rest_density mathematically
         # In SPH, fluid particles must spawn at a specific spacing relative to h 
         # to ensure the initial density evaluates to rest_density (not overlapping, not a void).
-        spacing = self.smoothing_length
+        spacing = self.smoothing_length / 2.0
         
         # Enforce maximum particle volume safety threshold
         # Evaluate how much area the set of particles will logically occupy
@@ -403,19 +403,28 @@ class FluidSimulation:
         return accelerations
 
     def apply_boundaries(self, positions: np.ndarray, velocities: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-        """Snaps particles inside clipbox domain executing continuous inelastic reflection"""
+        """Mirror-reflect particles off container walls, preserving inter-particle spacing.
+        
+        Uses proper elastic reflection with restitution damping rather than
+        clamping to a fixed position, which would collapse all boundary particles
+        onto the same coordinate and cause catastrophic density spikes in SPH.
+        """
         limit = self.position_scale
-        restitution = 0.5 # 50% energy loss upon hitting container wall
+        restitution = 0.5  # 50% energy loss upon hitting container wall
         
         for axis in range(2):
             mask_low = positions[:, axis] < -limit
             mask_high = positions[:, axis] > limit
             
-            positions[mask_low, axis] = -limit + 1e-4
-            velocities[mask_low, axis] = np.abs(velocities[mask_low, axis]) * restitution
+            # Mirror-reflect: bounce back by penetration depth (scaled by restitution)
+            # This preserves relative distances between particles at the boundary
+            penetration_low = -limit - positions[mask_low, axis]
+            positions[mask_low, axis] = -limit + penetration_low * restitution
+            velocities[mask_low, axis] *= -restitution
             
-            positions[mask_high, axis] = limit - 1e-4
-            velocities[mask_high, axis] = -np.abs(velocities[mask_high, axis]) * restitution
+            penetration_high = positions[mask_high, axis] - limit
+            positions[mask_high, axis] = limit - penetration_high * restitution
+            velocities[mask_high, axis] *= -restitution
             
         return positions, velocities
 
