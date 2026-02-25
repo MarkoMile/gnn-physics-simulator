@@ -489,14 +489,19 @@ class FluidSimulation:
         if np.any(fb_mask):
             fi = i_idx[fb_mask]
             bj = j_idx[fb_mask]
-            pt = p_term[fb_mask]
+            
+            # InteractiveComputerGraphics reference: only use fluid's dpi term for boundary repulsion
+            pt_fb = (all_pressures[fi] / all_densities[fi]**2)
+            
             gw = grad_w[fb_mask]
             w_fb = w[fb_mask]
             
-            a_press = all_masses[bj][:, np.newaxis] * pt[:, np.newaxis] * gw
-            # Viscosity: boundary velocity is 0, so v_rel = -v_fluid (no-slip damping)
+            a_press = all_masses[bj][:, np.newaxis] * pt_fb[:, np.newaxis] * gw
+            # Viscosity: boundary velocity is 0, which acts as a very strong no-slip condition.
+            # We scale it down or remove it to allow slip and avoid particles getting stuck.
+            boundary_friction = 0.0 
             v_rel = all_velocities[bj] - all_velocities[fi]
-            a_visc = (1.0 / dt) * self.viscosity * (all_masses[bj] / all_densities[bj])[:, np.newaxis] * v_rel * w_fb[:, np.newaxis]
+            a_visc = (1.0 / dt) * (self.viscosity * boundary_friction) * (all_masses[bj] / all_densities[bj])[:, np.newaxis] * v_rel * w_fb[:, np.newaxis]
             
             np.add.at(accelerations, fi, a_press + a_visc)
         
@@ -504,14 +509,18 @@ class FluidSimulation:
         if np.any(bf_mask):
             fj = j_idx[bf_mask]
             bi = i_idx[bf_mask]
-            pt = p_term[bf_mask]
+            
+            # InteractiveComputerGraphics reference: only use fluid's dpi term for boundary repulsion
+            pt_bf = (all_pressures[fj] / all_densities[fj]**2)
+            
             gw = grad_w[bf_mask]
             w_bf = w[bf_mask]
             
             # grad_w points from i(boundary) to j(fluid), so force on j uses -grad_w
-            a_press = all_masses[bi][:, np.newaxis] * pt[:, np.newaxis] * -gw
+            a_press = all_masses[bi][:, np.newaxis] * pt_bf[:, np.newaxis] * -gw
             v_rel = all_velocities[bi] - all_velocities[fj]  # boundary(0) - fluid_vel
-            a_visc = (1.0 / dt) * self.viscosity * (all_masses[bi] / all_densities[bi])[:, np.newaxis] * v_rel * w_bf[:, np.newaxis]
+            boundary_friction = 0.0
+            a_visc = (1.0 / dt) * (self.viscosity * boundary_friction) * (all_masses[bi] / all_densities[bi])[:, np.newaxis] * v_rel * w_bf[:, np.newaxis]
             
             np.add.at(accelerations, fj, a_press + a_visc)
         
