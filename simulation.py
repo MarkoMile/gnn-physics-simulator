@@ -9,6 +9,7 @@ training data for the GNN simulator.
 
 import numpy as np
 import os
+from scipy.spatial import cKDTree
 import json
 from typing import Tuple, Optional, Dict, Any
 
@@ -130,7 +131,8 @@ class NBodySimulation:
             return self.compute_gravitational_forces(positions_array, self.masses)
             
         save_idx = 0
-        for step in range(total_steps + 1):
+        from tqdm import tqdm
+        for step in tqdm(range(total_steps + 1), desc="N-Body Simulation Progress", leave=False):
             # Save current state
             if step % save_every == 0:
                 history_positions[save_idx] = pos
@@ -196,12 +198,12 @@ class FluidSimulation:
         self,
         num_particles: int,
         gravitational_constant: float = 9.8,
-        softening_length: float = 0.05, # Acts as the SPH Smoothing Length (h)
+        softening_length: float = 0.07, # Acts as the SPH Smoothing Length (h)
         integrator: str = 'symplectic_euler', # Crucial: SPH stability depends on Symplectic Euler
         position_scale: float = 1.0,
         # WCSPH specific parameters
         rest_density: float = 1000.0,
-        stiffness: float = 5000.0, # Tait's equation gas constant (k)
+        stiffness: float = 35000.0, # Tait's equation gas constant (k)
         viscosity: float = 0.05,
         exponent: float = 7.0
     ):
@@ -315,57 +317,70 @@ class FluidSimulation:
         accelerations = np.zeros_like(positions)
         N = self.num_particles
         h = self.smoothing_length
-        h_sq = h**2
         
-        # 0. Pre-compute pairwise distances
-        r = positions[np.newaxis, :, :] - positions[:, np.newaxis, :]  # r_ij = pos_j - pos_i
-        r_sq = np.sum(r**2, axis=-1)
-        r_dist = np.sqrt(r_sq)
+        # 0. O(N log N) KDTree Neighborhood Search
+        tree = cKDTree(positions)
+        pairs = tree.query_pairs(r=h)
         
-        # Mask out self-interactions and particles outside smoothing length
-        np.fill_diagonal(r_dist, np.inf)
-        mask = r_dist < h
-        
-        # 1. Density Computation (Cubic Spline)
-        # SPH density: sum_j m_j W_ij. Include self-density!
+        # 1. Density Computation (Cubic Spline) includes self-density!
         densities = np.full(N, self.masses[0] * self.kernel_0) 
-        if np.any(mask):
-            w = self.cubic_kernel_2d(r_dist)
-            densities += np.sum(masses[np.newaxis, :] * w, axis=1)
+        
+        if not pairs:
+            accelerations[:, 1] -= self.gravitational_constant
+            return accelerations
             
+        # Convert pairs to arrays for vectorized computation
+        pairs = np.array(list(pairs))
+        i_idx = pairs[:, 0]
+        j_idx = pairs[:, 1]
+        
+        # Compute distances for interacting pairs only
+        r_vec = positions[j_idx] - positions[i_idx] # vector from i to j
+        r_dist = np.linalg.norm(r_vec, axis=1)
+        
+        # Filter strictly overlapping but non-zero distances to avoid warnings
+        valid = r_dist > 1e-12
+        i_idx = i_idx[valid]
+        j_idx = j_idx[valid]
+        r_vec = r_vec[valid]
+        r_dist = r_dist[valid]
+        
+        if len(r_dist) > 0:
+            w = self.cubic_kernel_2d(r_dist)
+            
+            # Scatter add: particle i gains density from j, and j gains from i (symmetry)
+            np.add.at(densities, i_idx, masses[j_idx] * w)
+            np.add.at(densities, j_idx, masses[i_idx] * w)
+                
         # 2. Pressure Computation (Equation of State - Tait's Equation)
         # Apply a hard clamp at rest_density as per reference implementation
         densities = np.maximum(densities, self.rest_density)
-        
         # Tait's equation: p = k * ((rho / rho0)^gamma - 1)
         pressures = self.stiffness * ((densities / self.rest_density)**self.exponent - 1.0)
-        # Pressure is naturally >= 0 because rho is clamped to at least rho0
         
         # 3. Pressure & Viscosity Accelerations
-        if np.any(mask):
-            # Evaluate kernel gradients (N, N, 2)
-            # The gradient inherently computes the direction from i to j (or via r_ij = pos_j - pos_i)
-            # Since r is pos_j - pos_i, grad_w points towards j. The -m_j term makes force point away from j.
-            # Using our logic where grad_w represents nabla_i W_ij, it technically opposes r.
-            # Let's flatten to (N*N, 2) to evaluate vectorized function
-            r_flat = r.reshape(-1, 2)
-            r_dist_flat = r_dist.reshape(-1)
-            grad_w = self.cubic_kernel_2d_gradient(r_flat, r_dist_flat).reshape((N, N, 2))
+        if len(r_dist) > 0:
+            grad_w = self.cubic_kernel_2d_gradient(r_vec, r_dist) # points from i to j
             
-            # Pressure Force Action: a_i = sum_j m_j (P_i/rho_i^2 + P_j/rho_j^2) grad_W
-            p_term = (pressures / densities**2)[:, np.newaxis] + (pressures / densities**2)[np.newaxis, :]
-            # The gradient naturally correctly evaluates as outward pushing natively because we compute grad evaluated at j-i.
-            a_pressure = np.sum(masses[np.newaxis, :, np.newaxis] * p_term[:, :, np.newaxis] * grad_w, axis=1)
+            # Pressure Force: a_i = sum_j m_j (P_i/rho_i^2 + P_j/rho_j^2) grad_W
+            p_term = (pressures[i_idx] / densities[i_idx]**2) + (pressures[j_idx] / densities[j_idx]**2)
+            a_pressure_pair = masses[j_idx][:, np.newaxis] * p_term[:, np.newaxis] * grad_w
             
-            # Viscosity Acceleration (using XSPH-style velocity blending scaled by 1/dt)
-            # a_i = (1 / dt) * viscosity * sum_j (m_j / rho_j) * (v_j - v_i) * W_ij
-            w = self.cubic_kernel_2d(r_dist)
-            v_rel = velocities[np.newaxis, :, :] - velocities[:, np.newaxis, :] # v_j - v_i
-            a_viscosity = (1.0 / dt) * self.viscosity * np.sum(
-                (masses / densities)[np.newaxis, :, np.newaxis] * v_rel * w[:, :, np.newaxis], axis=1
-            )
+            # Viscosity Acceleration (XSPH-style velocity blending scaled by 1/dt)
+            v_rel = velocities[j_idx] - velocities[i_idx]
+            a_visc_pair = (1.0 / dt) * self.viscosity * (masses[j_idx] / densities[j_idx])[:, np.newaxis] * v_rel * w[:, np.newaxis]
             
-            accelerations += a_pressure + a_viscosity
+            # Total pair acceleration acting on i from j
+            a_total_pair_i = a_pressure_pair + a_visc_pair
+            np.add.at(accelerations, i_idx, a_total_pair_i)
+            
+            # For symmetric force on j, Newton's third law (gradients are anti-symmetric)
+            a_pressure_pair_j = masses[i_idx][:, np.newaxis] * p_term[:, np.newaxis] * -grad_w
+            v_rel_j = velocities[i_idx] - velocities[j_idx] # -v_rel
+            a_visc_pair_j = (1.0 / dt) * self.viscosity * (masses[i_idx] / densities[i_idx])[:, np.newaxis] * v_rel_j * w[:, np.newaxis]
+            
+            a_total_pair_j = a_pressure_pair_j + a_visc_pair_j
+            np.add.at(accelerations, j_idx, a_total_pair_j)
             
         # 4. External Forces (Gravity)
         accelerations[:, 1] -= self.gravitational_constant
@@ -410,7 +425,8 @@ class FluidSimulation:
             return self.compute_forces(positions_array, vel, self.masses, dt_step)
             
         save_idx = 0
-        for step in range(total_steps + 1):
+        from tqdm import tqdm
+        for step in tqdm(range(total_steps + 1), desc="Fluid Simulation Progress", leave=False):
             if step % save_every == 0:
                 history_positions[save_idx] = pos
                 history_velocities[save_idx] = vel
