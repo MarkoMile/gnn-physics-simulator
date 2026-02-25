@@ -44,3 +44,6 @@ simulation:
   rest_density: 1000.0        # Water density
   stiffness: 35000.0           # Tait's equation gas constant
   viscosity: 0.05              # Artificial damping tuning
+
+vizualization:
+  fps: 24
