@@ -31,11 +31,11 @@ simulation:
   num_trajectories: 1         # Just testing generation locally
   num_particles: 1000         # ~1000 particles per volume (maybe 1000 would be better?)
   total_time: 2.0             # 2.0s real physical time
-  dt: 0.00025                   # High precision integration step (small for SPH stability)
-  save_every: 40              # Sub-sample integration to yield length 200 sequences (0.01 per frame)
+  dt: 0.002                   # High precision integration step (small for SPH stability)
+  save_every: 5              # Sub-sample integration to yield length 200 sequences (0.01 per frame)
   integrator: 'symplectic_euler' # Crucial for SPH
-  gravitational_constant: 9.8 # Real surface gravity magnitude
-  softening_length: 0.08      # SPH Smoothing Length (h). Needs to encompass ~10-20 neighbors.
+  gravitational_constant: 9.81 # Real surface gravity magnitude
+  softening_length: 0.1      # SPH Smoothing Length (h). Needs to encompass ~10-20 neighbors.
   position_scale: 1.0         # 1m x 1m bounds
   velocity_scale: 0.0         # Start from rest
   mass_range_min: 1.0         # Ignored in fluid (auto-computed from rest_density)
@@ -43,6 +43,7 @@ simulation:
   # WCSPH specific parameters
   rest_density: 1000.0        # Water density
   stiffness: 35000.0           # Tait's equation gas constant
+  exponent: 7.0                # Exponent in Tait's equation
   viscosity: 0.05              # Artificial damping tuning
 
 vizualization:
