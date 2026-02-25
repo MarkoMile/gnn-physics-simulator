@@ -27,16 +27,20 @@ data:
 # Simulation config (for generating dataset)
 
 simulation:
-  type: 'n_body'               # Set to 'n_body' for space simulation, 'fluid' for WaterDrop
-  num_trajectories: 1000      # 1000 train trajectories (Deepmind spec)
-  num_particles: 100         # ~100 particles per volume (maybe 1000 would be better?)
+  type: 'fluid'               # Set to 'n_body' for space simulation, 'fluid' for WaterDrop
+  num_trajectories: 1         # Just testing generation locally
+  num_particles: 1000         # ~1000 particles per volume (maybe 1000 would be better?)
   total_time: 2.0             # 2.0s real physical time
-  dt: 0.005                   # High precision integration step
-  save_every: 2               # Sub-sample integration to yield length 400 sequences
-  integrator: 'rk4'
+  dt: 0.00025                   # High precision integration step (small for SPH stability)
+  save_every: 40              # Sub-sample integration to yield length 200 sequences (0.01 per frame)
+  integrator: 'symplectic_euler' # Crucial for SPH
   gravitational_constant: 9.8 # Real surface gravity magnitude
-  softening_length: 0.015     # Matching the connectivity radius
+  softening_length: 0.08      # SPH Smoothing Length (h). Needs to encompass ~10-20 neighbors.
   position_scale: 1.0         # 1m x 1m bounds
   velocity_scale: 0.0         # Start from rest
-  mass_range_min: 1.0         # Homogeneous material density
+  mass_range_min: 1.0         # Ignored in fluid (auto-computed from rest_density)
   mass_range_max: 1.0
+  # WCSPH specific parameters
+  rest_density: 1000.0        # Water density
+  stiffness: 35000.0           # Tait's equation gas constant
+  viscosity: 0.05              # Artificial damping tuning

@@ -47,7 +47,10 @@ def main():
         position_scale=sim_cfg.get('position_scale', 2.0),
         velocity_scale=sim_cfg.get('velocity_scale', 0.5),
         mass_range=(sim_cfg.get('mass_range_min', 0.8), sim_cfg.get('mass_range_max', 1.2)),
-        connectivity_radius=config.get('data', {}).get('connectivity_radius', 0.015)
+        connectivity_radius=config.get('data', {}).get('connectivity_radius', 0.015),
+        rest_density=sim_cfg.get('rest_density', 1000.0),
+        stiffness=sim_cfg.get('stiffness', 2000.0),
+        viscosity=sim_cfg.get('viscosity', 200.0)
     )
     
     print(f"\nDataset successfully generated and saved to {args.output}")

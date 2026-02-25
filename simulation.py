@@ -187,83 +187,209 @@ class NBodySimulation:
 
 class FluidSimulation:
     """
-    Fluid dynamics simulation using a pseudo-SPH method.
-    Simulates water drop splash interactions mapping native downward gravity,
-    inelastic repulsions, and a rigid simulation boundary explicitly defined.
+    Fluid dynamics simulation using Weakly Compressible Smoothed Particle Hydrodynamics (WCSPH).
+    Simulates water drop splash interactions using Poly6 (density), Spiky (pressure), and 
+    Laplacian (viscosity) kernels for fluid dynamics natively in 2D.
     """
     
     def __init__(
         self,
         num_particles: int,
         gravitational_constant: float = 9.8,
-        softening_length: float = 0.05,
-        integrator: str = 'rk4',
-        position_scale: float = 1.0
+        softening_length: float = 0.05, # Acts as the SPH Smoothing Length (h)
+        integrator: str = 'symplectic_euler', # Crucial: SPH stability depends on Symplectic Euler
+        position_scale: float = 1.0,
+        # WCSPH specific parameters
+        rest_density: float = 1000.0,
+        stiffness: float = 5000.0, # Tait's equation gas constant (k)
+        viscosity: float = 0.05,
+        exponent: float = 7.0
     ):
         self.num_particles = num_particles
         self.gravitational_constant = gravitational_constant
-        self.softening_length = softening_length
+        self.smoothing_length = softening_length
         self.integrator = get_integrator(integrator)
         self.position_scale = position_scale
+        
+        self.rest_density = rest_density
+        self.stiffness = stiffness
+        self.viscosity = viscosity
+        self.exponent = exponent
+        
+        # 2D Cubic Spline Kernel constants
+        h = self.smoothing_length
+        self.kernel_k = 40.0 / (7.0 * np.pi * h**2)
+        self.kernel_l = 240.0 / (7.0 * np.pi * h**2)
+        self.kernel_0 = self.kernel_k * 1.0  # Value at r=0 (q=0)
+        
+    def cubic_kernel_2d(self, r_dist: np.ndarray) -> np.ndarray:
+        """2D Cubic Spline Kernel evaluation"""
+        q = r_dist / self.smoothing_length
+        res = np.zeros_like(q)
+        
+        # q <= 0.5
+        mask1 = q <= 0.5
+        res[mask1] = self.kernel_k * (6.0 * q[mask1]**3 - 6.0 * q[mask1]**2 + 1.0)
+        
+        # 0.5 < q <= 1.0
+        mask2 = (q > 0.5) & (q <= 1.0)
+        res[mask2] = self.kernel_k * (2.0 * (1.0 - q[mask2])**3)
+        return res
+        
+    def cubic_kernel_2d_gradient(self, r: np.ndarray, r_dist: np.ndarray) -> np.ndarray:
+        """2D Cubic Spline Kernel Gradient evaluation"""
+        q = r_dist / self.smoothing_length
+        res = np.zeros_like(r)
+        
+        mask_valid = (q <= 1.0) & (r_dist > 1e-12)
+        if not np.any(mask_valid):
+            return res
+            
+        # q <= 0.5
+        mask1 = mask_valid & (q <= 0.5)
+        if np.any(mask1):
+            q1 = q[mask1]
+            factor1 = self.kernel_l * q1 * (3.0 * q1 - 2.0)
+            gradq_x1 = r[mask1, 0] / (r_dist[mask1] * self.smoothing_length)
+            gradq_y1 = r[mask1, 1] / (r_dist[mask1] * self.smoothing_length)
+            res[mask1, 0] = factor1 * gradq_x1
+            res[mask1, 1] = factor1 * gradq_y1
+            
+        # 0.5 < q <= 1.0
+        mask2 = mask_valid & (q > 0.5)
+        if np.any(mask2):
+            q2 = q[mask2]
+            factor2 = -self.kernel_l * (1.0 - q2)**2
+            gradq_x2 = r[mask2, 0] / (r_dist[mask2] * self.smoothing_length)
+            gradq_y2 = r[mask2, 1] / (r_dist[mask2] * self.smoothing_length)
+            res[mask2, 0] = factor2 * gradq_x2
+            res[mask2, 1] = factor2 * gradq_y2
+            
+        return res
 
     def initialize_random_state(
         self,
         position_scale: float = 1.0,
         velocity_scale: float = 0.1,
-        mass_range: Tuple[float, float] = (1.0, 1.0)
+        mass_range: Tuple[float, float] = (1.0, 1.0) # Uniform mass in fluid
     ):
-        """Initializes a clustered 'Water Drop' layout near the top of the box."""
+        """Initializes a uniform clustered 'Water Drop' layout near the top of the box."""
+        # Calculate optimal uniform spacing to satisfy rest_density
+        # We want density = rest_density initially. 
+        # In 2D, density ~ m / spacing^2. So spacing = sqrt(m / rest_density).
+        # We target a specific drop area and arrange particles uniformly.
+        
+        # approximate area based on position_scale limits
+        width = position_scale * 0.4
+        height = position_scale * 0.4
+        
+        # Calculate grid dimensions ensuring N particles fit
+        cols = int(np.sqrt(self.num_particles * (width / height)))
+        rows = int(np.ceil(self.num_particles / cols))
+        
+        spacing = min(width / cols, height / rows)
+        
         self.positions = np.zeros((self.num_particles, 2))
-        # Cluster at the top of the screen forming a drop width 0.5 * scale
-        self.positions[:, 0] = np.random.uniform(-position_scale * 0.5, position_scale * 0.5, self.num_particles)
-        # Cluster near the top edge Y in [0.5, 0.9] of the box!
-        self.positions[:, 1] = np.random.uniform(position_scale * 0.5, position_scale * 0.9, self.num_particles)
         
-        self.velocities = np.random.uniform(-velocity_scale, velocity_scale, (self.num_particles, 2))
+        # Center the drop horizontally and place vertically near the top
+        start_x = - (cols * spacing) / 2.0
+        start_y = position_scale * 0.9 - (rows * spacing)
         
-        self.masses = np.random.uniform(mass_range[0], mass_range[1], self.num_particles)
+        for i in range(self.num_particles):
+            row = i // cols
+            col = i % cols
+            # Add a microscopic jitter (1e-4) to prevent perfectly symmetric grid locking issues
+            jitter_x = np.random.uniform(-1e-4, 1e-4)
+            jitter_y = np.random.uniform(-1e-4, 1e-4)
+            self.positions[i, 0] = start_x + col * spacing + jitter_x
+            self.positions[i, 1] = start_y + row * spacing + jitter_y
+            
+        # self.velocities = np.random.uniform(-velocity_scale, velocity_scale, (self.num_particles, 2))
+        self.velocities = np.zeros((self.num_particles, 2))
 
-    def compute_forces(self, positions: np.ndarray, masses: np.ndarray) -> np.ndarray:
+        # mass computation : m = spacing^2 * rest_density
+        m0 = (spacing**2) * self.rest_density
+        self.masses = np.full(self.num_particles, m0)
+
+    def compute_forces(self, positions: np.ndarray, velocities: np.ndarray, masses: np.ndarray, dt: float) -> np.ndarray:
         accelerations = np.zeros_like(positions)
+        N = self.num_particles
+        h = self.smoothing_length
+        h_sq = h**2
         
-        # 1. Downward Gravity Target
+        # 0. Pre-compute pairwise distances
+        r = positions[np.newaxis, :, :] - positions[:, np.newaxis, :]  # r_ij = pos_j - pos_i
+        r_sq = np.sum(r**2, axis=-1)
+        r_dist = np.sqrt(r_sq)
+        
+        # Mask out self-interactions and particles outside smoothing length
+        np.fill_diagonal(r_dist, np.inf)
+        mask = r_dist < h
+        
+        # 1. Density Computation (Cubic Spline)
+        # SPH density: sum_j m_j W_ij. Include self-density!
+        densities = np.full(N, self.masses[0] * self.kernel_0) 
+        if np.any(mask):
+            w = self.cubic_kernel_2d(r_dist)
+            densities += np.sum(masses[np.newaxis, :] * w, axis=1)
+            
+        # 2. Pressure Computation (Equation of State - Tait's Equation)
+        # Apply a hard clamp at rest_density as per reference implementation
+        densities = np.maximum(densities, self.rest_density)
+        
+        # Tait's equation: p = k * ((rho / rho0)^gamma - 1)
+        pressures = self.stiffness * ((densities / self.rest_density)**self.exponent - 1.0)
+        # Pressure is naturally >= 0 because rho is clamped to at least rho0
+        
+        # 3. Pressure & Viscosity Accelerations
+        if np.any(mask):
+            # Evaluate kernel gradients (N, N, 2)
+            # The gradient inherently computes the direction from i to j (or via r_ij = pos_j - pos_i)
+            # Since r is pos_j - pos_i, grad_w points towards j. The -m_j term makes force point away from j.
+            # Using our logic where grad_w represents nabla_i W_ij, it technically opposes r.
+            # Let's flatten to (N*N, 2) to evaluate vectorized function
+            r_flat = r.reshape(-1, 2)
+            r_dist_flat = r_dist.reshape(-1)
+            grad_w = self.cubic_kernel_2d_gradient(r_flat, r_dist_flat).reshape((N, N, 2))
+            
+            # Pressure Force Action: a_i = sum_j m_j (P_i/rho_i^2 + P_j/rho_j^2) grad_W
+            p_term = (pressures / densities**2)[:, np.newaxis] + (pressures / densities**2)[np.newaxis, :]
+            # The gradient naturally correctly evaluates as outward pushing natively because we compute grad evaluated at j-i.
+            a_pressure = np.sum(masses[np.newaxis, :, np.newaxis] * p_term[:, :, np.newaxis] * grad_w, axis=1)
+            
+            # Viscosity Acceleration (using XSPH-style velocity blending scaled by 1/dt)
+            # a_i = (1 / dt) * viscosity * sum_j (m_j / rho_j) * (v_j - v_i) * W_ij
+            w = self.cubic_kernel_2d(r_dist)
+            v_rel = velocities[np.newaxis, :, :] - velocities[:, np.newaxis, :] # v_j - v_i
+            a_viscosity = (1.0 / dt) * self.viscosity * np.sum(
+                (masses / densities)[np.newaxis, :, np.newaxis] * v_rel * w[:, :, np.newaxis], axis=1
+            )
+            
+            accelerations += a_pressure + a_viscosity
+            
+        # 4. External Forces (Gravity)
         accelerations[:, 1] -= self.gravitational_constant
         
-        # 2. SPH Repulsive Pressure
-        r = positions[np.newaxis, :, :] - positions[:, np.newaxis, :]
-        r_sq = np.sum(r**2, axis=-1)
-        np.fill_diagonal(r_sq, np.inf)
+        # 5. Global Math Safety Clamp
+        # Prevent numerical explosion (max ~1000g of force on any given particle)
+        max_acc = self.gravitational_constant * 1000.0
+        accelerations = np.clip(accelerations, -max_acc, max_acc)
         
-        # Trigger extremely aggressive repulsion if squeezed closer than 2x collision margin
-        repulsion_radius = self.softening_length * 2.0
-        mask = r_sq < (repulsion_radius**2)
-        
-        if np.any(mask):
-            r_dist = np.sqrt(r_sq[mask])
-            # Secure numerical division by clamping identical overlapping particles
-            r_dist_safe = np.maximum(r_dist, 1e-8)
-            f_mag = 15.0 * self.gravitational_constant * (1.0 - r_dist_safe / repulsion_radius)**2
-            r_dir = r[mask] / r_dist_safe[:, np.newaxis]
-            
-            rep_acc = np.zeros_like(positions)
-            np.add.at(rep_acc, np.nonzero(mask)[0], f_mag[:, np.newaxis] * r_dir)
-            accelerations += rep_acc
-            
         return accelerations
 
     def apply_boundaries(self, positions: np.ndarray, velocities: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-        """Snaps particles exactly inside clipbox domains after integration step executing continuous inelastic reflection"""
+        """Snaps particles inside clipbox domain executing continuous inelastic reflection"""
         limit = self.position_scale
         restitution = 0.5 # 50% energy loss upon hitting container wall
         
-        for axis in range(2): # Process exactly X and Y limits (2D fluid bounding)
+        for axis in range(2):
             mask_low = positions[:, axis] < -limit
             mask_high = positions[:, axis] > limit
             
-            positions[mask_low, axis] = -limit
+            positions[mask_low, axis] = -limit + 1e-4
             velocities[mask_low, axis] = np.abs(velocities[mask_low, axis]) * restitution
             
-            positions[mask_high, axis] = limit
+            positions[mask_high, axis] = limit - 1e-4
             velocities[mask_high, axis] = -np.abs(velocities[mask_high, axis]) * restitution
             
         return positions, velocities
@@ -279,8 +405,9 @@ class FluidSimulation:
         pos = self.positions.copy()
         vel = self.velocities.copy()
         
-        def force_fn(positions_array):
-            return self.compute_forces(positions_array, self.masses)
+        # Closure capturing current state dependencies and dt integration delta
+        def force_fn(positions_array, dt_step):
+            return self.compute_forces(positions_array, vel, self.masses, dt_step)
             
         save_idx = 0
         for step in range(total_steps + 1):
@@ -301,10 +428,11 @@ class FluidSimulation:
 
     def compute_total_energy(self) -> float:
         """
-        Compute total energy (kinetic + potential).
+        Compute total energy (kinetic + potential gravity).
+        Internal pressure energy is omitted as WCSPH equations of state are highly non-conservative.
         
         Returns:
-            Total energy of the system
+            Total tracked energy of the system
         """
         if not hasattr(self, 'positions') or not hasattr(self, 'velocities') or not hasattr(self, 'masses'):
             raise ValueError("Simulation state not initialized. Call initialize_random_state() first.")
@@ -315,24 +443,8 @@ class FluidSimulation:
         
         # Potential Energy (Gravity): U = m * g * y
         potential_energy_gravity = np.sum(self.masses * self.gravitational_constant * self.positions[:, 1])
-        
-        # Potential Energy (SPH Repulsion)
-        r = self.positions[np.newaxis, :, :] - self.positions[:, np.newaxis, :]
-        r_sq = np.sum(r**2, axis=-1)
-        repulsion_radius = self.softening_length * 2.0
-        
-        # Upper triangle to avoid double counting pairs
-        mask = (r_sq < repulsion_radius**2) & np.triu(np.ones_like(r_sq, dtype=bool), k=1)
-        
-        potential_energy_repulsion = 0.0
-        if np.any(mask):
-            r_dist = np.sqrt(r_sq[mask])
-            # Integrating the repulsive force F_mag = 15.0 * G * (1 - r/R)^2 yields U = 5.0 * G * R * (1 - r/R)^3
-            u_rep = 5.0 * self.gravitational_constant * repulsion_radius * (1.0 - r_dist / repulsion_radius)**3
-            potential_energy_repulsion = np.sum(u_rep)
             
-        return float(kinetic_energy + potential_energy_gravity + potential_energy_repulsion)
-
+        return float(kinetic_energy + potential_energy_gravity)
 
 
 """
@@ -392,7 +504,10 @@ def generate_dataset(
                 gravitational_constant=gravitational_constant,
                 softening_length=softening_length,
                 integrator=integrator,
-                position_scale=position_scale
+                position_scale=position_scale,
+                rest_density=simulation_kwargs.get('rest_density', 1000.0),
+                stiffness=simulation_kwargs.get('stiffness', 2000.0),
+                viscosity=simulation_kwargs.get('viscosity', 200.0)
             )
         else:
             sim = NBodySimulation(
