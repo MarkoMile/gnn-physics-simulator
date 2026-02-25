@@ -20,7 +20,7 @@ data:
   history_window: 5
   connectivity_radius: 0.015
   spatial_dim: 2
-  dataset_path: 'data/WaterDrop'
+  dataset_path: 'data/WaterDropSample'
   dataset_format: 'tfrecord' # Options: 'npz' (native Python) or 'tfrecord' (DeepMind)
 
 
@@ -29,14 +29,14 @@ data:
 simulation:
   type: 'fluid'               # Set to 'n_body' for space simulation, 'fluid' for WaterDrop
   num_trajectories: 1         # Just testing generation locally
-  num_particles: 1000         # ~1000 particles per volume (maybe 1000 would be better?)
+  num_particles: 600         # DeepMind WaterDrop uses 600 particles on average
   total_time: 2.0             # 2.0s real physical time
-  dt: 0.002                   # High precision integration step (small for SPH stability)
-  save_every: 5              # Sub-sample integration to yield length 200 sequences (0.01 per frame)
+  dt: 0.0025                 # Integration timestep
+  save_every: 4              # Sub-sample integration to yield length 200 sequences (0.01 per frame)
   integrator: 'symplectic_euler' # Crucial for SPH
   gravitational_constant: 9.81 # Real surface gravity magnitude
-  softening_length: 0.1      # SPH Smoothing Length (h). Needs to encompass ~10-20 neighbors.
-  position_scale: 1.0         # 1m x 1m bounds
+  softening_length: 0.1      # SPH Smoothing Length (h).
+  position_scale: 1.0         # Container edge length is 1.0
   velocity_scale: 0.0         # Start from rest
   mass_range_min: 1.0         # Ignored in fluid (auto-computed from rest_density)
   mass_range_max: 1.0
