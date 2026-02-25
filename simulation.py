@@ -527,10 +527,6 @@ class FluidSimulation:
         # 4. External Forces (Gravity) — fluid only
         accelerations[:, 1] -= self.gravitational_constant
         
-        # 5. Global Math Safety Clamp
-        max_acc = self.gravitational_constant * 1000.0
-        accelerations = np.clip(accelerations, -max_acc, max_acc)
-        
         return accelerations
 
     def apply_boundaries(self, positions: np.ndarray, velocities: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
@@ -555,6 +551,14 @@ class FluidSimulation:
         return positions, velocities
 
     def simulate(self, total_time: float, dt: float, save_every: int = 1) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        # Formally validate Courant-Friedrichs-Lewy (CFL) stability for acoustic waves
+        c_s = np.sqrt(self.stiffness / self.rest_density)
+        max_dt = 0.4 * (self.smoothing_length / c_s)
+        
+        if dt > max_dt:
+            print(f"WARNING: Provided dt={dt} violates the CFL condition (max_dt={max_dt:.5f} for h={self.smoothing_length}, cs={c_s:.2f}).")
+            print("The simulation may be numerically unstable and explode. Consider drastically lowering dt or stiffness.")
+            
         total_steps = int(total_time / dt)
         num_saved = (total_steps // save_every) + 1
         dim = self.positions.shape[1]
