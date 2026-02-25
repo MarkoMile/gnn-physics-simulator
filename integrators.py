@@ -44,7 +44,7 @@ class EulerIntegrator(Integrator):
         positions, velocities = state
         
         # Compute accelerations
-        accelerations = force_fn(positions)
+        accelerations = force_fn(positions, dt)
         
         # Forward Euler update
         new_positions = positions + velocities * dt
@@ -65,19 +65,19 @@ class RK4Integrator(Integrator):
         positions, velocities = state
 
         # k1 = f(y_n)
-        k1_v = force_fn(positions)
+        k1_v = force_fn(positions, dt)
         k1_x = velocities
 
         # k2 = f(y_n + dt/2 * k1)
-        k2_v = force_fn(positions + k1_x * dt / 2)
+        k2_v = force_fn(positions + k1_x * dt / 2, dt)
         k2_x = velocities + k1_v * dt / 2
 
         # k3 = f(y_n + dt/2 * k2)
-        k3_v = force_fn(positions + k2_x * dt / 2)
+        k3_v = force_fn(positions + k2_x * dt / 2, dt)
         k3_x = velocities + k2_v * dt / 2
 
         # k4 = f(y_n + dt * k3)
-        k4_v = force_fn(positions + k3_x * dt)
+        k4_v = force_fn(positions + k3_x * dt, dt)
         k4_x = velocities + k3_v * dt
 
         new_positions = positions + (k1_x + 2 * k2_x + 2 * k3_x + k4_x) * dt / 6
@@ -112,12 +112,39 @@ class VerletIntegrator(Integrator):
         raise NotImplementedError("VerletIntegrator not implemented yet")
 
 
+class SymplecticEulerIntegrator(Integrator):
+    """
+    Symplectic Euler (Semi-Implicit) integrator.
+    
+    First-order symplectic method mathematically required for SPH stability 
+    so that particle pressure dependencies compute with updated velocities:
+    v(t+dt) = v(t) + a(t) * dt
+    x(t+dt) = x(t) + v(t+dt) * dt
+    """
+    
+    def step(self, state, dt, force_fn):
+        """Perform one Symplectic Euler integration step."""
+        positions, velocities = state
+        
+        # 1. Evaluate forces using CURRENT positions
+        # (SPH will capture current velocities directly in its force_fn closure)
+        accelerations = force_fn(positions, dt)
+        
+        # 2. Update velocities FIRST
+        new_velocities = velocities + accelerations * dt
+        
+        # 3. Update positions using NEW velocities
+        new_positions = positions + new_velocities * dt
+        
+        return new_positions, new_velocities
+
+
 def get_integrator(name: str) -> Integrator:
     """
     Factory function to get integrator by name.
     
     Args:
-        name: Integrator name ('euler', 'rk4', 'leapfrog', 'verlet')
+        name: Integrator name ('euler', 'rk4', 'leapfrog', 'verlet', 'symplectic_euler')
         
     Returns:
         Integrator instance
@@ -127,11 +154,11 @@ def get_integrator(name: str) -> Integrator:
         'rk4': RK4Integrator,
         'leapfrog': LeapfrogIntegrator,
         'verlet': VerletIntegrator,
+        'symplectic_euler': SymplecticEulerIntegrator,
     }
     
     if name.lower() not in integrators:
         raise ValueError(f"Unknown integrator: {name}")
     
     return integrators[name.lower()]()
-
 
