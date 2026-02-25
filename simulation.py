@@ -279,7 +279,7 @@ class FluidSimulation:
         # Calculate optimal uniform spacing to satisfy rest_density mathematically
         # In SPH, fluid particles must spawn at a specific spacing relative to h 
         # to ensure the initial density evaluates to rest_density (not overlapping, not a void).
-        spacing = self.smoothing_length / 1.2
+        spacing = self.smoothing_length
         
         # Enforce maximum particle volume safety threshold
         # Evaluate how much area the set of particles will logically occupy
