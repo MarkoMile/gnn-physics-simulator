@@ -282,8 +282,8 @@ class FluidSimulation:
         
         boundary_pts = []
         
-        # Bottom and top walls (full width including corners)
-        x_vals = np.arange(-limit, limit + spacing * 0.5, spacing)
+        # Bottom and top walls (extend past limit to avoid corner holes)
+        x_vals = np.arange(-limit - num_layers * spacing, limit + num_layers * spacing + 1e-5, spacing)
         for layer in range(num_layers):
             offset = (layer + 0.5) * spacing  # half-spacing offset from wall
             # Bottom wall
@@ -293,8 +293,8 @@ class FluidSimulation:
             for x in x_vals:
                 boundary_pts.append([x, limit + offset])
         
-        # Left and right walls (excluding corners already covered)
-        y_vals = np.arange(-limit + spacing, limit, spacing)
+        # Left and right walls
+        y_vals = np.arange(-limit, limit + 1e-5, spacing)
         for layer in range(num_layers):
             offset = (layer + 0.5) * spacing
             # Left wall
@@ -306,9 +306,32 @@ class FluidSimulation:
         
         self.boundary_positions = np.array(boundary_pts)
         self.num_boundary = len(self.boundary_positions)
-        # Boundary mass = spacing^2 * rest_density (same as fluid)
-        m0 = (spacing ** 2) * self.rest_density
-        self.boundary_masses = np.full(self.num_boundary, m0)
+        
+        # Compute pseudo-mass (psi) for boundary particles (Akinci et al. 2012)
+        # psi_i = rest_density / sum_j W(r_ij)
+        from scipy.spatial import cKDTree
+        tree = cKDTree(self.boundary_positions)
+        pairs = tree.query_pairs(r=self.smoothing_length)
+        
+        deltas = np.full(self.num_boundary, self.kernel_0)
+        if pairs:
+            pairs_arr = np.array(list(pairs))
+            i_idx = pairs_arr[:, 0]
+            j_idx = pairs_arr[:, 1]
+            r_vec = self.boundary_positions[i_idx] - self.boundary_positions[j_idx]
+            r_dist = np.linalg.norm(r_vec, axis=1)
+            
+            valid = r_dist > 1e-12
+            r_dist = r_dist[valid]
+            i_idx = i_idx[valid]
+            j_idx = j_idx[valid]
+            
+            if len(r_dist) > 0:
+                w = self.cubic_kernel_2d(r_dist)
+                np.add.at(deltas, i_idx, w)
+                np.add.at(deltas, j_idx, w)
+                
+        self.boundary_masses = self.rest_density / deltas
 
     def initialize_random_state(
         self,
@@ -479,8 +502,8 @@ class FluidSimulation:
             
             # Viscosity (XSPH)
             v_rel = all_velocities[fj] - all_velocities[fi]
-            a_visc_ij = (1.0 / dt) * self.viscosity * (all_masses[fj] / all_densities[fj])[:, np.newaxis] * v_rel * w_ff[:, np.newaxis]
-            a_visc_ji = (1.0 / dt) * self.viscosity * (all_masses[fi] / all_densities[fi])[:, np.newaxis] * -v_rel * w_ff[:, np.newaxis]
+            a_visc_ij = self.viscosity * (all_masses[fj] / all_densities[fj])[:, np.newaxis] * v_rel * w_ff[:, np.newaxis]
+            a_visc_ji = self.viscosity * (all_masses[fi] / all_densities[fi])[:, np.newaxis] * -v_rel * w_ff[:, np.newaxis]
             
             np.add.at(accelerations, fi, a_press_ij + a_visc_ij)
             np.add.at(accelerations, fj, a_press_ji + a_visc_ji)
@@ -501,7 +524,7 @@ class FluidSimulation:
             # We scale it down or remove it to allow slip and avoid particles getting stuck.
             boundary_friction = 0.0 
             v_rel = all_velocities[bj] - all_velocities[fi]
-            a_visc = (1.0 / dt) * (self.viscosity * boundary_friction) * (all_masses[bj] / all_densities[bj])[:, np.newaxis] * v_rel * w_fb[:, np.newaxis]
+            a_visc = (self.viscosity * boundary_friction) * (all_masses[bj] / all_densities[bj])[:, np.newaxis] * v_rel * w_fb[:, np.newaxis]
             
             np.add.at(accelerations, fi, a_press + a_visc)
         
@@ -520,7 +543,7 @@ class FluidSimulation:
             a_press = all_masses[bi][:, np.newaxis] * pt_bf[:, np.newaxis] * -gw
             v_rel = all_velocities[bi] - all_velocities[fj]  # boundary(0) - fluid_vel
             boundary_friction = 0.0
-            a_visc = (1.0 / dt) * (self.viscosity * boundary_friction) * (all_masses[bi] / all_densities[bi])[:, np.newaxis] * v_rel * w_bf[:, np.newaxis]
+            a_visc = (self.viscosity * boundary_friction) * (all_masses[bi] / all_densities[bi])[:, np.newaxis] * v_rel * w_bf[:, np.newaxis]
             
             np.add.at(accelerations, fj, a_press + a_visc)
         
@@ -536,23 +559,25 @@ class FluidSimulation:
         rarely activate. Keeps particles strictly inside the container.
         """
         limit = self.position_scale
+        spacing = self.smoothing_length / 2.0
+        safe_limit = limit - 0.5 * spacing
         
         for axis in range(2):
-            mask_low = positions[:, axis] < -limit
-            mask_high = positions[:, axis] > limit
+            mask_low = positions[:, axis] < -safe_limit
+            mask_high = positions[:, axis] > safe_limit
             
-            # Hard clamp position, zero out velocity component
-            positions[mask_low, axis] = -limit
-            velocities[mask_low, axis] = 0.0
+            # Hard clamp position, soft bounce velocity component
+            positions[mask_low, axis] = -safe_limit
+            velocities[mask_low, axis] *= -0.5
             
-            positions[mask_high, axis] = limit
-            velocities[mask_high, axis] = 0.0
+            positions[mask_high, axis] = safe_limit
+            velocities[mask_high, axis] *= -0.5
             
         return positions, velocities
 
     def simulate(self, total_time: float, dt: float, save_every: int = 1) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         # Formally validate Courant-Friedrichs-Lewy (CFL) stability for acoustic waves
-        c_s = np.sqrt(self.stiffness / self.rest_density)
+        c_s = np.sqrt((self.stiffness * self.exponent) / self.rest_density)
         max_dt = 0.4 * (self.smoothing_length / c_s)
         
         if dt > max_dt:
@@ -671,8 +696,8 @@ def generate_dataset(
                 integrator=integrator,
                 position_scale=position_scale,
                 rest_density=simulation_kwargs.get('rest_density', 1000.0),
-                stiffness=simulation_kwargs.get('stiffness', 2000.0),
-                viscosity=simulation_kwargs.get('viscosity', 200.0)
+                stiffness=simulation_kwargs.get('stiffness', 35000.0),
+                viscosity=simulation_kwargs.get('viscosity', 0.05)
             )
         else:
             sim = NBodySimulation(
