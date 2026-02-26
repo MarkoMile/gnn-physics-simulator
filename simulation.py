@@ -337,7 +337,8 @@ class FluidSimulation:
         self,
         position_scale: float = 1.0,
         velocity_scale: float = 0.1,
-        mass_range: Tuple[float, float] = (1.0, 1.0) # Uniform mass in fluid
+        mass_range: Tuple[float, float] = (1.0, 1.0), # Uniform mass in fluid
+        start: Tuple[float,float] = (0.0, 0.5) # Starting position of the drop center
     ):
         """Initializes a uniform clustered 'Water Drop' layout near the top of the box."""
         # Calculate optimal uniform spacing to satisfy rest_density mathematically
@@ -365,9 +366,17 @@ class FluidSimulation:
         
         self.positions = np.zeros((self.num_particles, 2))
         
-        # Center the drop horizontally and place vertically near the top
-        start_x = - (cols * spacing) / 2.0
-        start_y = position_scale * 0.9 - (rows * spacing)
+        # Place the drop using start position as the center of the cluster
+        # Center accurately by accounting for grid boundaries (cols-1)*spacing
+        grid_width = (cols - 1) * spacing
+        grid_height = (rows - 1) * spacing
+
+        start_x = start[0] - grid_width / 2.0
+        start_y = start[1] - grid_height / 2.0
+
+        # Clip to ensure the entire grid fits inside [-position_scale, position_scale]
+        start_x = np.clip(start_x, -position_scale, position_scale - grid_width)
+        start_y = np.clip(start_y, -position_scale, position_scale - grid_height)
         
         for i in range(self.num_particles):
             row = i // cols
