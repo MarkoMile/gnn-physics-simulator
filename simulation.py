@@ -305,6 +305,107 @@ def compute_forces_jit(
         
     return accelerations
 
+    return accelerations
+
+@njit
+def _pos_to_cell(pos, min_pos, inv_cell_size, grid_dim):
+    """Map position to a 1D cell index."""
+    ix = int((pos[0] - min_pos) * inv_cell_size)
+    iy = int((pos[1] - min_pos) * inv_cell_size)
+    # Clip to grid boundaries
+    ix = max(0, min(ix, grid_dim - 1))
+    iy = max(0, min(iy, grid_dim - 1))
+    return ix * grid_dim + iy
+
+@njit
+def build_grid_jit(positions, min_pos, inv_cell_size, grid_dim, cell_starts, cell_ends, sorted_indices):
+    """Build the uniform grid by counting particles per cell and sorting indices."""
+    num_particles = positions.shape[0]
+    num_cells = grid_dim * grid_dim
+    
+    # Reset grid arrays
+    cell_starts.fill(-1)
+    cell_ends.fill(-1)
+    
+    # Count particles per cell
+    cell_counts = np.zeros(num_cells, dtype=np.int32)
+    particle_cells = np.zeros(num_particles, dtype=np.int32)
+    
+    for i in range(num_particles):
+        c = _pos_to_cell(positions[i], min_pos, inv_cell_size, grid_dim)
+        particle_cells[i] = c
+        cell_counts[c] += 1
+        
+    # Compute cumulative offsets (cell_starts)
+    current_offset = 0
+    for c in range(num_cells):
+        if cell_counts[c] > 0:
+            cell_starts[c] = current_offset
+            cell_ends[c] = current_offset + cell_counts[c]
+            current_offset += cell_counts[c]
+            
+    # Fill sorted_indices
+    # Reuse cell_counts to track current insertion point for each cell
+    insertion_offsets = cell_starts.copy()
+    for i in range(num_particles):
+        c = particle_cells[i]
+        pos_in_sorted = insertion_offsets[c]
+        sorted_indices[pos_in_sorted] = i
+        insertion_offsets[c] += 1
+
+@njit
+def find_pairs_ugs_jit(positions, smoothing_length, min_pos, inv_cell_size, grid_dim, cell_starts, cell_ends, sorted_indices):
+    """Find neighbor pairs using the uniform grid."""
+    num_particles = positions.shape[0]
+    # Max pairs estimate - in 2D SPH, typically ~30-50 neighbors per particle
+    # We allocate a reasonably large buffer and return a slice.
+    max_pairs = num_particles * 64 
+    pairs = np.zeros((max_pairs, 2), dtype=np.int64)
+    pair_count = 0
+    
+    h_sq = smoothing_length * smoothing_length
+    
+    for cx in range(grid_dim):
+        for cy in range(grid_dim):
+            c_idx = cx * grid_dim + cy
+            if cell_starts[c_idx] == -1:
+                continue
+                
+            # Check cell and 8 neighbors (only looking forward/current to avoid duplicates)
+            # Actually, standard query_pairs style: check all neighbors for i < j or similar.
+            # For simplicity and to match cKDTree.query_pairs exactly:
+            # We'll check the cell itself and all 8 neighbors, keeping i < j.
+            
+            for dx in range(-1, 2):
+                nx = cx + dx
+                if nx < 0 or nx >= grid_dim: continue
+                for dy in range(-1, 2):
+                    ny = cy + dy
+                    if ny < 0 or ny >= grid_dim: continue
+                    
+                    n_idx = nx * grid_dim + ny
+                    if cell_starts[n_idx] == -1:
+                        continue
+                        
+                    # Particle i in cell c_idx, particle j in cell n_idx
+                    for p_i_idx in range(cell_starts[c_idx], cell_ends[c_idx]):
+                        i = sorted_indices[p_i_idx]
+                        
+                        for p_j_idx in range(cell_starts[n_idx], cell_ends[n_idx]):
+                            j = sorted_indices[p_j_idx]
+                            
+                            # Avoid double counting and self-interaction
+                            if i < j:
+                                dist_sq = (positions[i, 0] - positions[j, 0])**2 + \
+                                          (positions[i, 1] - positions[j, 1])**2
+                                if dist_sq < h_sq:
+                                    if pair_count < max_pairs:
+                                        pairs[pair_count, 0] = i
+                                        pairs[pair_count, 1] = j
+                                        pair_count += 1
+                                        
+    return pairs[:pair_count]
+
 @njit
 def _accumulate_boundary_densities_jit(pairs, positions, deltas, h, k):
     """JIT helper for boundary particle constant density."""
@@ -403,6 +504,15 @@ class FluidSimulation:
         self.num_boundary = len(self.boundary_positions)
         N_total = self.num_particles + self.num_boundary
         
+        # Grid parameters for UGS
+        h = self.smoothing_length
+        limit = self.position_scale
+        self.grid_min = -limit - (num_layers + 1) * spacing # buffer for boundaries
+        self.grid_inv_size = 1.0 / h
+        # Total span / h
+        span = 2 * limit + 2 * (num_layers + 1) * spacing
+        self.grid_dim = int(np.ceil(span * self.grid_inv_size)) + 1
+        
         # Initialize/Resize Pre-allocated memory pools
         self.all_positions = np.zeros((N_total, 2))
         self.all_velocities = np.zeros((N_total, 2))
@@ -410,18 +520,37 @@ class FluidSimulation:
         self.all_densities = np.zeros(N_total)
         self.all_pressures = np.zeros(N_total)
         
+        # Buffers for UGS
+        num_cells = self.grid_dim * self.grid_dim
+        self.cell_starts = np.full(num_cells, -1, dtype=np.int32)
+        self.cell_ends = np.full(num_cells, -1, dtype=np.int32)
+        self.sorted_indices = np.zeros(N_total, dtype=np.int32)
+        
         # Fill Boundary Slices (Static)
         self.all_positions[self.num_particles:] = self.boundary_positions
         # Boundary velocities remain zero by default
         
         # Compute pseudo-mass (psi) for boundary particles (Akinci et al. 2012)
         # psi_i = rest_density / sum_j W(r_ij)
-        tree = cKDTree(self.boundary_positions)
-        pairs_set = tree.query_pairs(r=self.smoothing_length)
+        
+        # Build grid for boundary particles ONLY to find boundary-boundary pairs
+        # (This is a one-time setup)
+        temp_starts = np.full(num_cells, -1, dtype=np.int32)
+        temp_ends = np.full(num_cells, -1, dtype=np.int32)
+        temp_indices = np.zeros(self.num_boundary, dtype=np.int32)
+        
+        build_grid_jit(
+            self.boundary_positions, self.grid_min, self.grid_inv_size, self.grid_dim,
+            temp_starts, temp_ends, temp_indices
+        )
+        
+        pairs = find_pairs_ugs_jit(
+            self.boundary_positions, self.smoothing_length, self.grid_min, self.grid_inv_size, self.grid_dim,
+            temp_starts, temp_ends, temp_indices
+        )
         
         deltas = np.full(self.num_boundary, self.kernel_0)
-        if pairs_set:
-            pairs = np.array(list(pairs_set), dtype=np.int64)
+        if len(pairs) > 0:
             # Use a specialized JIT helper for boundary density to avoid np.add.at
             _accumulate_boundary_densities_jit(
                 pairs, self.boundary_positions, deltas, 
@@ -501,25 +630,28 @@ class FluidSimulation:
         self.all_masses[:self.num_particles] = m0
 
     def compute_forces(self, positions: np.ndarray, velocities: np.ndarray, masses: np.ndarray, dt: float) -> np.ndarray:
-        """High-performance SPH force computation using Numba JIT and pre-allocated memory."""
-        # 1. Update fluid slices in unified arrays (No concatenate!)
+        """High-performance SPH force computation using Numba JIT and Uniform Grid Search."""
+        # 1. Update fluid slices in unified arrays
         self.all_positions[:self.num_particles] = positions
         self.all_velocities[:self.num_particles] = velocities
-        # Masses are assumed fixed/updated in initialize_random_state
         
-        # 2. Neighborhood Search
-        tree = cKDTree(self.all_positions)
-        pairs_set = tree.query_pairs(r=self.smoothing_length)
+        # 2. Neighborhood Search (Uniform Grid Search)
+        build_grid_jit(
+            self.all_positions, self.grid_min, self.grid_inv_size, self.grid_dim,
+            self.cell_starts, self.cell_ends, self.sorted_indices
+        )
         
-        if not pairs_set:
+        pairs = find_pairs_ugs_jit(
+            self.all_positions, self.smoothing_length, self.grid_min, self.grid_inv_size, self.grid_dim,
+            self.cell_starts, self.cell_ends, self.sorted_indices
+        )
+        
+        if len(pairs) == 0:
             accel = np.zeros((self.num_particles, 2))
             accel[:, 1] -= self.gravitational_constant
             return accel
             
-        pairs = np.array(list(pairs_set), dtype=np.int64)
-        
         # 3. Density Accumulation (JIT)
-        # Reset fluid densities, boundary densities are fixed
         self.all_densities[:self.num_particles] = self.all_masses[:self.num_particles] * self.kernel_0
         
         compute_densities_jit(
