@@ -57,7 +57,7 @@ class NBodySimulation:
             velocity_scale: Scale for initial velocities
             mass_range: Range for random masses (min, max)
         """
-        self.positions = np.random.uniform(-position_scale, position_scale, (self.num_particles, 2))
+        self.positions = np.random.uniform(0, position_scale, (self.num_particles, 2))
         self.velocities = np.random.uniform(-velocity_scale, velocity_scale, (self.num_particles, 2))
         self.masses = np.random.uniform(mass_range[0], mass_range[1], self.num_particles)
     
@@ -478,24 +478,24 @@ class FluidSimulation:
         
         boundary_pts = []
         
-        # Bottom and top walls (extend past limit to avoid corner holes)
-        x_vals = np.arange(-limit - num_layers * spacing, limit + num_layers * spacing + 1e-5, spacing)
+        # Bottom and top walls (extend past corners to avoid holes)
+        x_vals = np.arange(0 - num_layers * spacing, limit + num_layers * spacing + 1e-5, spacing)
         for layer in range(num_layers):
             offset = (layer + 0.5) * spacing  # half-spacing offset from wall
             # Bottom wall
             for x in x_vals:
-                boundary_pts.append([x, -limit - offset])
+                boundary_pts.append([x, 0 - offset])
             # Top wall
             for x in x_vals:
                 boundary_pts.append([x, limit + offset])
         
         # Left and right walls
-        y_vals = np.arange(-limit, limit + 1e-5, spacing)
+        y_vals = np.arange(0, limit + 1e-5, spacing)
         for layer in range(num_layers):
             offset = (layer + 0.5) * spacing
             # Left wall
             for y in y_vals:
-                boundary_pts.append([-limit - offset, y])
+                boundary_pts.append([0 - offset, y])
             # Right wall
             for y in y_vals:
                 boundary_pts.append([limit + offset, y])
@@ -507,10 +507,10 @@ class FluidSimulation:
         # Grid parameters for UGS
         h = self.smoothing_length
         limit = self.position_scale
-        self.grid_min = -limit - (num_layers + 1) * spacing # buffer for boundaries
+        self.grid_min = 0 - (num_layers + 1) * spacing # buffer for boundaries
         self.grid_inv_size = 1.0 / h
         # Total span / h
-        span = 2 * limit + 2 * (num_layers + 1) * spacing
+        span = limit + 2 * (num_layers + 1) * spacing
         self.grid_dim = int(np.ceil(span * self.grid_inv_size)) + 1
         
         # Initialize/Resize Pre-allocated memory pools
@@ -581,7 +581,7 @@ class FluidSimulation:
         spacing = self.smoothing_length / 2.0
         
         required_area = self.num_particles * (spacing ** 2)
-        total_container_area = (2.0 * pos_scale) ** 2
+        total_container_area = pos_scale ** 2
         max_allowed_area = 0.90 * total_container_area
         
         if required_area > max_allowed_area:
@@ -610,9 +610,9 @@ class FluidSimulation:
         start_x = start[0] - grid_width / 2.0
         start_y = start[1] - grid_height / 2.0
 
-        # Clip to ensure the entire grid fits inside [-pos_scale, pos_scale]
-        start_x = np.clip(start_x, -pos_scale, pos_scale - grid_width)
-        start_y = np.clip(start_y, -pos_scale, pos_scale - grid_height)
+        # Clip to ensure the entire grid fits inside [0, pos_scale]
+        start_x = np.clip(start_x, 0, pos_scale - grid_width)
+        start_y = np.clip(start_y, 0, pos_scale - grid_height)
         
         # Fill positions
         for i in range(self.num_particles):
@@ -685,17 +685,18 @@ class FluidSimulation:
         """
         limit = self.position_scale
         spacing = self.smoothing_length / 2.0
-        safe_limit = limit - 0.5 * spacing
+        lower_limit = 0.5 * spacing
+        upper_limit = limit - 0.5 * spacing
         
         for axis in range(2):
-            mask_low = positions[:, axis] < -safe_limit
-            mask_high = positions[:, axis] > safe_limit
+            mask_low = positions[:, axis] < lower_limit
+            mask_high = positions[:, axis] > upper_limit
             
             # Hard clamp position, soft bounce velocity component
-            positions[mask_low, axis] = -safe_limit
+            positions[mask_low, axis] = lower_limit
             velocities[mask_low, axis] *= -0.5
             
-            positions[mask_high, axis] = safe_limit
+            positions[mask_high, axis] = upper_limit
             velocities[mask_high, axis] *= -0.5
             
         return positions, velocities
@@ -857,7 +858,7 @@ def generate_dataset(
     
     # Determine correct bounds based on simulation type
     if simulation_type == 'fluid':
-        bounds = [[-position_scale, position_scale] for _ in range(2)]
+        bounds = [[0, position_scale] for _ in range(2)]
     else:
         bounds = None  # N-Body has no walls
     
