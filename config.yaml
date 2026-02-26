@@ -32,7 +32,7 @@ simulation:
   num_particles: 600         # DeepMind WaterDrop uses 600 particles on average
   total_time: 2.0             # 2.0s real physical time
   dt: 0.0025                 # Integration timestep
-  save_every: 4              # Sub-sample integration to yield length 200 sequences (0.01 per frame)
+  save_every: 1              # sub-sample integration (1 = no sub-sampling)
   integrator: 'symplectic_euler' # Crucial for SPH
   gravitational_constant: 9.81 # Real surface gravity magnitude
   softening_length: 0.1      # SPH Smoothing Length (h).
@@ -44,7 +44,7 @@ simulation:
   rest_density: 1000.0        # Water density
   stiffness: 35000.0           # Tait's equation gas constant
   exponent: 7.0                # Exponent in Tait's equation
-  viscosity: 0.05              # Artificial damping tuning
+  viscosity: 0.05
 
 vizualization:
   fps: 24
