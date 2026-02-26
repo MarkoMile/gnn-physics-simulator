@@ -19,6 +19,9 @@ torch-geometric
 # Optional: TFRecord loading from DeepMind datasets
 tensorflow-cpu
 
+# Sim JIT optimization
+numba
+
 # Configuration
 pyyaml
 omegaconf

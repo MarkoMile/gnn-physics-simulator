@@ -12,6 +12,8 @@ import os
 from scipy.spatial import cKDTree
 import json
 from typing import Tuple, Optional, Dict, Any
+import numba
+from numba import njit
 
 
 class NBodySimulation:
@@ -187,6 +189,136 @@ class NBodySimulation:
         
         return float(kinetic_energy + potential_energy)
 
+@njit
+def cubic_kernel_2d_jit(r_dist, smoothing_length, kernel_k):
+    """JIT-accelerated 2D Cubic Spline Kernel evaluation"""
+    q = r_dist / smoothing_length
+    if q <= 0.5:
+        return kernel_k * (6.0 * q**3 - 6.0 * q**2 + 1.0)
+    elif q <= 1.0:
+        return kernel_k * (2.0 * (1.0 - q)**3)
+    else:
+        return 0.0
+
+@njit
+def cubic_kernel_2d_gradient_jit(r_x, r_y, r_dist, smoothing_length, kernel_l):
+    """JIT-accelerated 2D Cubic Spline Kernel Gradient evaluation"""
+    q = r_dist / smoothing_length
+    if q > 1.0 or r_dist <= 1e-12:
+        return 0.0, 0.0
+        
+    if q <= 0.5:
+        factor = kernel_l * q * (3.0 * q - 2.0)
+    else:
+        factor = -kernel_l * (1.0 - q)**2
+        
+    gradq_x = r_x / (r_dist * smoothing_length)
+    gradq_y = r_y / (r_dist * smoothing_length)
+    return factor * gradq_x, factor * gradq_y
+
+@njit
+def compute_densities_jit(
+    pairs, positions, masses, densities,
+    smoothing_length, kernel_k, kernel_0, N_fluid
+):
+    """JIT-accelerated density accumulation using neighbor pairs."""
+    # Densities should be pre-initialized with (mass * kernel_0) for self-contribution
+    for idx in range(len(pairs)):
+        i = pairs[idx, 0]
+        j = pairs[idx, 1]
+        
+        dx = positions[j, 0] - positions[i, 0]
+        dy = positions[j, 1] - positions[i, 1]
+        r_dist = np.sqrt(dx*dx + dy*dy)
+        
+        if r_dist < smoothing_length:
+            w = cubic_kernel_2d_jit(r_dist, smoothing_length, kernel_k)
+            # Both particles get contribution if fluid
+            if i < N_fluid:
+                densities[i] += masses[j] * w
+            if j < N_fluid:
+                densities[j] += masses[i] * w
+
+@njit
+def compute_forces_jit(
+    pairs, positions, velocities, masses, densities, pressures,
+    smoothing_length, kernel_l, viscosity, stiffness, rest_density, exponent,
+    gravitational_constant, N_fluid
+):
+    """JIT-accelerated pressure and viscosity force computation."""
+    accelerations = np.zeros((N_fluid, 2))
+    cs = np.sqrt((stiffness * exponent) / rest_density)
+    epsilon = 0.01 * (smoothing_length**2)
+    boundary_friction = 1.0
+    
+    for idx in range(len(pairs)):
+        i = pairs[idx, 0]
+        j = pairs[idx, 1]
+        
+        # At least one must be fluid to receive force
+        if i >= N_fluid and j >= N_fluid:
+            continue
+            
+        dx = positions[j, 0] - positions[i, 0]
+        dy = positions[j, 1] - positions[i, 1]
+        r_dist = np.sqrt(dx*dx + dy*dy)
+        
+        if r_dist <= 1e-12 or r_dist > smoothing_length:
+            continue
+            
+        gx, gy = cubic_kernel_2d_gradient_jit(dx, dy, r_dist, smoothing_length, kernel_l)
+        
+        # Pressure terms
+        p_i = pressures[i] / (densities[i]**2)
+        p_j = pressures[j] / (densities[j]**2)
+        p_term = p_i + p_j
+        
+        # Viscosity (Artificial Viscosity)
+        vx = velocities[j, 0] - velocities[i, 0]
+        vy = velocities[j, 1] - velocities[i, 1]
+        v_dot_r = vx * dx + vy * dy
+        
+        v_dot_r_clipped = v_dot_r if v_dot_r < 0.0 else 0.0
+        mu_ij = (smoothing_length * v_dot_r_clipped) / (r_dist*r_dist + epsilon)
+        rho_ij = 0.5 * (densities[i] + densities[j])
+        
+        # Correct classification for friction
+        fric = boundary_friction if (i >= N_fluid or j >= N_fluid) else 1.0
+        pi_ij = (-viscosity * fric * cs * mu_ij) / rho_ij
+        
+        # Combined force term
+        f_x = (p_term + pi_ij) * gx
+        f_y = (p_term + pi_ij) * gy
+        
+        # Apply forces (symmetric if both fluid, one-way if one is boundary)
+        if i < N_fluid:
+            accelerations[i, 0] += masses[j] * f_x
+            accelerations[i, 1] += masses[j] * f_y
+            
+        if j < N_fluid:
+            accelerations[j, 0] -= masses[i] * f_x
+            accelerations[j, 1] -= masses[i] * f_y
+            
+    # Add gravity
+    for i in range(N_fluid):
+        accelerations[i, 1] -= gravitational_constant
+        
+    return accelerations
+
+@njit
+def _accumulate_boundary_densities_jit(pairs, positions, deltas, h, k):
+    """JIT helper for boundary particle constant density."""
+    for idx in range(len(pairs)):
+        i = pairs[idx, 0]
+        j = pairs[idx, 1]
+        dx = positions[j, 0] - positions[i, 0]
+        dy = positions[j, 1] - positions[i, 1]
+        r = np.sqrt(dx*dx + dy*dy)
+        if r < h:
+            w = cubic_kernel_2d_jit(r, h, k)
+            deltas[i] += w
+            deltas[j] += w
+
 class FluidSimulation:
     """
     Fluid dynamics simulation using Weakly Compressible Smoothed Particle Hydrodynamics (WCSPH).
@@ -223,52 +355,15 @@ class FluidSimulation:
         self.kernel_k = 40.0 / (7.0 * np.pi * h**2)
         self.kernel_l = 240.0 / (7.0 * np.pi * h**2)
         self.kernel_0 = self.kernel_k * 1.0  # Value at r=0 (q=0)
-        
-    def cubic_kernel_2d(self, r_dist: np.ndarray) -> np.ndarray:
-        """2D Cubic Spline Kernel evaluation"""
-        q = r_dist / self.smoothing_length
-        res = np.zeros_like(q)
-        
-        # q <= 0.5
-        mask1 = q <= 0.5
-        res[mask1] = self.kernel_k * (6.0 * q[mask1]**3 - 6.0 * q[mask1]**2 + 1.0)
-        
-        # 0.5 < q <= 1.0
-        mask2 = (q > 0.5) & (q <= 1.0)
-        res[mask2] = self.kernel_k * (2.0 * (1.0 - q[mask2])**3)
-        return res
-        
-    def cubic_kernel_2d_gradient(self, r: np.ndarray, r_dist: np.ndarray) -> np.ndarray:
-        """2D Cubic Spline Kernel Gradient evaluation"""
-        q = r_dist / self.smoothing_length
-        res = np.zeros_like(r)
-        
-        mask_valid = (q <= 1.0) & (r_dist > 1e-12)
-        if not np.any(mask_valid):
-            return res
-            
-        # q <= 0.5
-        mask1 = mask_valid & (q <= 0.5)
-        if np.any(mask1):
-            q1 = q[mask1]
-            factor1 = self.kernel_l * q1 * (3.0 * q1 - 2.0)
-            gradq_x1 = r[mask1, 0] / (r_dist[mask1] * self.smoothing_length)
-            gradq_y1 = r[mask1, 1] / (r_dist[mask1] * self.smoothing_length)
-            res[mask1, 0] = factor1 * gradq_x1
-            res[mask1, 1] = factor1 * gradq_y1
-            
-        # 0.5 < q <= 1.0
-        mask2 = mask_valid & (q > 0.5)
-        if np.any(mask2):
-            q2 = q[mask2]
-            factor2 = -self.kernel_l * (1.0 - q2)**2
-            gradq_x2 = r[mask2, 0] / (r_dist[mask2] * self.smoothing_length)
-            gradq_y2 = r[mask2, 1] / (r_dist[mask2] * self.smoothing_length)
-            res[mask2, 0] = factor2 * gradq_x2
-            res[mask2, 1] = factor2 * gradq_y2
-            
-        return res
 
+        # Pre-allocate unified memory pools (Fluid + Boundary)
+        self.num_boundary = 0 # Will be updated in _generate_boundary_particles
+        self.all_positions = np.zeros((0, 2))
+        self.all_velocities = np.zeros((0, 2))
+        self.all_masses = np.zeros(0)
+        self.all_densities = np.zeros(0)
+        self.all_pressures = np.zeros(0)
+        
     def _generate_boundary_particles(self):
         """Generate static boundary particles along all 4 container walls.
         
@@ -306,32 +401,38 @@ class FluidSimulation:
         
         self.boundary_positions = np.array(boundary_pts)
         self.num_boundary = len(self.boundary_positions)
+        N_total = self.num_particles + self.num_boundary
+        
+        # Initialize/Resize Pre-allocated memory pools
+        self.all_positions = np.zeros((N_total, 2))
+        self.all_velocities = np.zeros((N_total, 2))
+        self.all_masses = np.zeros(N_total)
+        self.all_densities = np.zeros(N_total)
+        self.all_pressures = np.zeros(N_total)
+        
+        # Fill Boundary Slices (Static)
+        self.all_positions[self.num_particles:] = self.boundary_positions
+        # Boundary velocities remain zero by default
         
         # Compute pseudo-mass (psi) for boundary particles (Akinci et al. 2012)
         # psi_i = rest_density / sum_j W(r_ij)
-        from scipy.spatial import cKDTree
         tree = cKDTree(self.boundary_positions)
-        pairs = tree.query_pairs(r=self.smoothing_length)
+        pairs_set = tree.query_pairs(r=self.smoothing_length)
         
         deltas = np.full(self.num_boundary, self.kernel_0)
-        if pairs:
-            pairs_arr = np.array(list(pairs))
-            i_idx = pairs_arr[:, 0]
-            j_idx = pairs_arr[:, 1]
-            r_vec = self.boundary_positions[i_idx] - self.boundary_positions[j_idx]
-            r_dist = np.linalg.norm(r_vec, axis=1)
-            
-            valid = r_dist > 1e-12
-            r_dist = r_dist[valid]
-            i_idx = i_idx[valid]
-            j_idx = j_idx[valid]
-            
-            if len(r_dist) > 0:
-                w = self.cubic_kernel_2d(r_dist)
-                np.add.at(deltas, i_idx, w)
-                np.add.at(deltas, j_idx, w)
+        if pairs_set:
+            pairs = np.array(list(pairs_set), dtype=np.int64)
+            # Use a specialized JIT helper for boundary density to avoid np.add.at
+            _accumulate_boundary_densities_jit(
+                pairs, self.boundary_positions, deltas, 
+                self.smoothing_length, self.kernel_k
+            )
                 
         self.boundary_masses = self.rest_density / deltas
+        # Fill Boundary Mass Slice
+        self.all_masses[self.num_particles:] = self.boundary_masses
+        # Pre-initialize boundary densities as fixed
+        self.all_densities[self.num_particles:] = self.rest_density
 
     def initialize_random_state(
         self,
@@ -348,13 +449,8 @@ class FluidSimulation:
         pos_scale = self.position_scale
 
         # Calculate optimal uniform spacing to satisfy rest_density mathematically
-        # In SPH, fluid particles must spawn at a specific spacing relative to h 
-        # to ensure the initial density evaluates to rest_density (not overlapping, not a void).
         spacing = self.smoothing_length / 2.0
         
-        # Enforce maximum particle volume safety threshold
-        # Evaluate how much area the set of particles will logically occupy
-        # based on geometry vs maximum available container space.
         required_area = self.num_particles * (spacing ** 2)
         total_container_area = (2.0 * pos_scale) ** 2
         max_allowed_area = 0.90 * total_container_area
@@ -366,14 +462,19 @@ class FluidSimulation:
                 f"Reduce num_particles or decrease softening_length."
             )
         
-        # Calculate grid dimensions ensuring N particles fit
         cols = int(np.sqrt(self.num_particles))
         rows = int(np.ceil(self.num_particles / cols))
         
-        self.positions = np.zeros((self.num_particles, 2))
+        # Ensure boundary particles exist before setting fluid views
+        if self.num_boundary == 0:
+            self._generate_boundary_particles()
+
+        # Set up views into memory pools for the fluid slice
+        self.positions = self.all_positions[:self.num_particles]
+        self.velocities = self.all_velocities[:self.num_particles]
+        self.masses = self.all_masses[:self.num_particles]
         
-        # Place the drop using start position as the center of the cluster
-        # Center accurately by accounting for grid boundaries (cols-1)*spacing
+        # Calculate grid boundaries
         grid_width = (cols - 1) * spacing
         grid_height = (rows - 1) * spacing
 
@@ -384,217 +485,63 @@ class FluidSimulation:
         start_x = np.clip(start_x, -pos_scale, pos_scale - grid_width)
         start_y = np.clip(start_y, -pos_scale, pos_scale - grid_height)
         
+        # Fill positions
         for i in range(self.num_particles):
             row = i // cols
             col = i % cols
-            # Add a microscopic jitter (1e-4) to prevent perfectly symmetric grid locking issues
             jitter_x = np.random.uniform(-1e-4, 1e-4)
             jitter_y = np.random.uniform(-1e-4, 1e-4)
             self.positions[i, 0] = start_x + col * spacing + jitter_x
             self.positions[i, 1] = start_y + row * spacing + jitter_y
             
-        self.velocities = np.zeros((self.num_particles, 2))
+        self.velocities.fill(0.0)
 
         # mass computation : m = spacing^2 * rest_density
         m0 = (spacing**2) * self.rest_density
-        self.masses = np.full(self.num_particles, m0)
-        
-        # Generate static boundary particles along container walls
-        self._generate_boundary_particles()
+        self.all_masses[:self.num_particles] = m0
 
     def compute_forces(self, positions: np.ndarray, velocities: np.ndarray, masses: np.ndarray, dt: float) -> np.ndarray:
-        """Compute SPH forces including boundary particle interactions.
+        """High-performance SPH force computation using Numba JIT and pre-allocated memory."""
+        # 1. Update fluid slices in unified arrays (No concatenate!)
+        self.all_positions[:self.num_particles] = positions
+        self.all_velocities[:self.num_particles] = velocities
+        # Masses are assumed fixed/updated in initialize_random_state
         
-        Boundary particles contribute density and pressure to fluid particles
-        but are static (zero velocity, fixed density = rest_density, pressure = 0).
-        Returns accelerations for fluid particles only.
-        """
-        N_fluid = self.num_particles
-        N_bound = self.num_boundary
-        N_total = N_fluid + N_bound
-        h = self.smoothing_length
+        # 2. Neighborhood Search
+        tree = cKDTree(self.all_positions)
+        pairs_set = tree.query_pairs(r=self.smoothing_length)
         
-        # Concatenate fluid + boundary positions/masses for unified KDTree search
-        all_positions = np.concatenate([positions, self.boundary_positions], axis=0)
-        all_masses = np.concatenate([masses, self.boundary_masses], axis=0)
-        # Boundary velocities are zero
-        all_velocities = np.concatenate([velocities, np.zeros((N_bound, 2))], axis=0)
-        
-        accelerations = np.zeros((N_fluid, 2))  # Only fluid particles get accelerated
-        
-        # 0. O(N log N) KDTree Neighborhood Search over ALL particles
-        tree = cKDTree(all_positions)
-        pairs = tree.query_pairs(r=h)
-        
-        # 1. Density Computation — fluid self-density initialized, boundary fixed
-        fluid_densities = np.full(N_fluid, masses[0] * self.kernel_0)
-        
-        if not pairs:
-            accelerations[:, 1] -= self.gravitational_constant
-            return accelerations
-        
-        # Convert pairs to arrays for vectorized computation
-        pairs = np.array(list(pairs))
-        i_idx = pairs[:, 0]
-        j_idx = pairs[:, 1]
-        
-        # Compute distances for interacting pairs
-        r_vec = all_positions[j_idx] - all_positions[i_idx]  # vector from i to j
-        r_dist = np.linalg.norm(r_vec, axis=1)
-        
-        # Filter zero distances
-        valid = r_dist > 1e-12
-        i_idx = i_idx[valid]
-        j_idx = j_idx[valid]
-        r_vec = r_vec[valid]
-        r_dist = r_dist[valid]
-        
-        if len(r_dist) == 0:
-            accelerations[:, 1] -= self.gravitational_constant
-            return accelerations
-        
-        w = self.cubic_kernel_2d(r_dist)
-        
-        # Classify pair types using boolean masks
-        i_is_fluid = i_idx < N_fluid
-        j_is_fluid = j_idx < N_fluid
-        
-        # --- Density contributions to fluid particles ---
-        # Case: both fluid (symmetric)
-        ff_mask = i_is_fluid & j_is_fluid
-        if np.any(ff_mask):
-            fi = i_idx[ff_mask]
-            fj = j_idx[ff_mask]
-            w_ff = w[ff_mask]
-            np.add.at(fluid_densities, fi, all_masses[fj] * w_ff)
-            np.add.at(fluid_densities, fj, all_masses[fi] * w_ff)
-        
-        # Case: fluid-boundary (only fluid gets density contribution)
-        fb_mask = i_is_fluid & ~j_is_fluid
-        if np.any(fb_mask):
-            fi = i_idx[fb_mask]
-            bj = j_idx[fb_mask]
-            w_fb = w[fb_mask]
-            np.add.at(fluid_densities, fi, all_masses[bj] * w_fb)
-        
-        # Case: boundary-fluid (only fluid j gets density contribution)
-        bf_mask = ~i_is_fluid & j_is_fluid
-        if np.any(bf_mask):
-            fj = j_idx[bf_mask]
-            bi = i_idx[bf_mask]
-            w_bf = w[bf_mask]
-            np.add.at(fluid_densities, fj, all_masses[bi] * w_bf)
-        
-        # (boundary-boundary pairs: ignored — boundary density is fixed)
-        
-        # 2. Pressure Computation (Tait's Equation) — fluid only
-        fluid_densities = np.maximum(fluid_densities, self.rest_density)
-        fluid_pressures = self.stiffness * ((fluid_densities / self.rest_density)**self.exponent - 1.0)
-        
-        # Build full density/pressure arrays for indexing convenience
-        # Boundary: density = rest_density, pressure = 0
-        all_densities = np.concatenate([fluid_densities, np.full(N_bound, self.rest_density)])
-        all_pressures = np.concatenate([fluid_pressures, np.zeros(N_bound)])
-        
-        # 3. Pressure & Viscosity Accelerations
-        # Viscosity: Monaghan's Artificial Viscosity (Monaghan, J. J. (1992))
-        grad_w = self.cubic_kernel_2d_gradient(r_vec, r_dist)
-        
-        # Compute per-pair pressure term and viscosity for ALL pairs
-        p_term = (all_pressures[i_idx] / all_densities[i_idx]**2) + \
-                 (all_pressures[j_idx] / all_densities[j_idx]**2)
-        
-        cs = np.sqrt((self.stiffness * self.exponent) / self.rest_density)
-        epsilon = 0.01 * (self.smoothing_length ** 2)
-
-
-        # --- Fluid-Fluid pairs: symmetric forces ---
-        if np.any(ff_mask):
-            fi = i_idx[ff_mask]
-            fj = j_idx[ff_mask]
-            pt = p_term[ff_mask]
-            gw = grad_w[ff_mask]
-            r_vec_ff = r_vec[ff_mask]
-            r_dist_ff = r_dist[ff_mask]
+        if not pairs_set:
+            accel = np.zeros((self.num_particles, 2))
+            accel[:, 1] -= self.gravitational_constant
+            return accel
             
-            # 1. Pressure
-            a_press_ij = all_masses[fj][:, np.newaxis] * pt[:, np.newaxis] * gw
-            a_press_ji = all_masses[fi][:, np.newaxis] * pt[:, np.newaxis] * -gw
-            
-            # 2. Viscosity
-            v_rel = all_velocities[fj] - all_velocities[fi]
-            v_dot_r = np.sum(v_rel * r_vec_ff, axis=1)
-            
-            # THE FIX: Clamp positive values to 0.0. No boolean masking needed!
-            v_dot_r_clipped = np.minimum(v_dot_r, 0.0)
-            
-            mu_ij = (self.smoothing_length * v_dot_r_clipped) / (r_dist_ff**2 + epsilon)
-            rho_ij = 0.5 * (all_densities[fi] + all_densities[fj])
-            
-            pi_ij = (-self.viscosity * cs * mu_ij) / rho_ij
-            
-            a_visc_ij = all_masses[fj][:, np.newaxis] * pi_ij[:, np.newaxis] * gw
-            a_visc_ji = all_masses[fi][:, np.newaxis] * pi_ij[:, np.newaxis] * -gw
-            
-            np.add.at(accelerations, fi, a_press_ij + a_visc_ij)
-            np.add.at(accelerations, fj, a_press_ji + a_visc_ji)
+        pairs = np.array(list(pairs_set), dtype=np.int64)
         
-        # --- Fluid-Boundary pairs: force on fluid i from boundary j ---
-        if np.any(fb_mask):
-            fi = i_idx[fb_mask]
-            bj = j_idx[fb_mask]
-            r_vec_fb = r_vec[fb_mask]
-            r_dist_fb = r_dist[fb_mask]
-            
-            # Pressure
-            pt_fb = (all_pressures[fi] / all_densities[fi]**2)
-            gw = grad_w[fb_mask]
-            a_press = all_masses[bj][:, np.newaxis] * pt_fb[:, np.newaxis] * gw
-            
-            # Viscosity
-            boundary_friction = 1.0 
-            v_rel = all_velocities[bj] - all_velocities[fi]
-            v_dot_r = np.sum(v_rel * r_vec_fb, axis=1)
-            
-            v_dot_r_clipped = np.minimum(v_dot_r, 0.0)
-            
-            mu_ij = (self.smoothing_length * v_dot_r_clipped) / (r_dist_fb**2 + epsilon)
-            rho_ij = 0.5 * (all_densities[fi] + all_densities[bj])
-            
-            pi_ij = (-(self.viscosity * boundary_friction) * cs * mu_ij) / rho_ij
-            a_visc = all_masses[bj][:, np.newaxis] * pi_ij[:, np.newaxis] * gw
-                
-            np.add.at(accelerations, fi, a_press + a_visc)
+        # 3. Density Accumulation (JIT)
+        # Reset fluid densities, boundary densities are fixed
+        self.all_densities[:self.num_particles] = self.all_masses[:self.num_particles] * self.kernel_0
         
-        # --- Boundary-Fluid pairs: force on fluid j from boundary i ---
-        if np.any(bf_mask):
-            fj = j_idx[bf_mask]
-            bi = i_idx[bf_mask]
-            r_vec_bf = r_vec[bf_mask]
-            r_dist_bf = r_dist[bf_mask]
-            
-            # Pressure
-            pt_bf = (all_pressures[fj] / all_densities[fj]**2)
-            gw = grad_w[bf_mask]
-            a_press = all_masses[bi][:, np.newaxis] * pt_bf[:, np.newaxis] * -gw
-            
-            # Viscosity
-            boundary_friction = 1.0 
-            v_rel = all_velocities[fj] - all_velocities[bi]
-            v_dot_r = np.sum(v_rel * r_vec_bf, axis=1)
-            
-            v_dot_r_clipped = np.minimum(v_dot_r, 0.0)
-            
-            mu_ij = (self.smoothing_length * v_dot_r_clipped) / (r_dist_bf**2 + epsilon)
-            rho_ij = 0.5 * (all_densities[bi] + all_densities[fj])
-            
-            pi_ij = (-(self.viscosity * boundary_friction) * cs * mu_ij) / rho_ij
-            a_visc = all_masses[bi][:, np.newaxis] * pi_ij[:, np.newaxis] * -gw
-                
-            np.add.at(accelerations, fj, a_press + a_visc)
+        compute_densities_jit(
+            pairs, self.all_positions, self.all_masses, self.all_densities,
+            self.smoothing_length, self.kernel_k, self.kernel_0, self.num_particles
+        )
         
-        # 4. External Forces (Gravity) — fluid only
-        accelerations[:, 1] -= self.gravitational_constant
+        # 4. Pressure Update (Tait's Equation)
+        # Clamping and pressure calculation can be vectorized or JIT-ed.
+        # Boundary pressures are 0 by default.
+        self.all_densities[:self.num_particles] = np.maximum(self.all_densities[:self.num_particles], self.rest_density)
+        self.all_pressures[:self.num_particles] = self.stiffness * (
+            (self.all_densities[:self.num_particles] / self.rest_density)**self.exponent - 1.0
+        )
+        
+        # 5. Force Accumulation (JIT)
+        accelerations = compute_forces_jit(
+            pairs, self.all_positions, self.all_velocities, self.all_masses,
+            self.all_densities, self.all_pressures,
+            self.smoothing_length, self.kernel_l, self.viscosity, self.stiffness,
+            self.rest_density, self.exponent, self.gravitational_constant, self.num_particles
+        )
         
         return accelerations
 
