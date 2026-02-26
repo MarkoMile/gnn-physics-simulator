@@ -7,6 +7,7 @@ for solving ordinary differential equations in physics simulations.
 
 import numpy as np
 from abc import ABC, abstractmethod
+from numba import njit
 
 
 class Integrator(ABC):
@@ -30,6 +31,13 @@ class Integrator(ABC):
         return state
 
 
+@njit
+def euler_step_jit(positions, velocities, accelerations, dt):
+    """JIT-optimized Euler step logic."""
+    new_positions = positions + velocities * dt
+    new_velocities = velocities + accelerations * dt
+    return new_positions, new_velocities
+
 class EulerIntegrator(Integrator):
     """
     Forward Euler integrator.
@@ -42,16 +50,16 @@ class EulerIntegrator(Integrator):
     def step(self, state, dt, force_fn):
         """Perform one Euler integration step."""
         positions, velocities = state
-        
-        # Compute accelerations
         accelerations = force_fn(positions, dt)
-        
-        # Forward Euler update
-        new_positions = positions + velocities * dt
-        new_velocities = velocities + accelerations * dt
-        
-        return new_positions, new_velocities
+        return euler_step_jit(positions, velocities, accelerations, dt)
 
+
+@njit
+def rk4_step_jit(positions, velocities, k1_x, k2_x, k3_x, k4_x, k1_v, k2_v, k3_v, k4_v, dt):
+    """JIT-optimized RK4 final state combination."""
+    new_positions = positions + (k1_x + 2 * k2_x + 2 * k3_x + k4_x) * dt / 6
+    new_velocities = velocities + (k1_v + 2 * k2_v + 2 * k3_v + k4_v) * dt / 6
+    return new_positions, new_velocities
 
 class RK4Integrator(Integrator):
     """
@@ -80,10 +88,7 @@ class RK4Integrator(Integrator):
         k4_v = force_fn(positions + k3_x * dt, dt)
         k4_x = velocities + k3_v * dt
 
-        new_positions = positions + (k1_x + 2 * k2_x + 2 * k3_x + k4_x) * dt / 6
-        new_velocities = velocities + (k1_v + 2 * k2_v + 2 * k3_v + k4_v) * dt / 6
-
-        return new_positions, new_velocities
+        return rk4_step_jit(positions, velocities, k1_x, k2_x, k3_x, k4_x, k1_v, k2_v, k3_v, k4_v, dt)
 
 class LeapfrogIntegrator(Integrator):
     """
@@ -112,6 +117,15 @@ class VerletIntegrator(Integrator):
         raise NotImplementedError("VerletIntegrator not implemented yet")
 
 
+@njit
+def symplectic_euler_step_jit(positions, velocities, accelerations, dt):
+    """JIT-optimized Symplectic Euler step logic."""
+    # 1. Update velocities FIRST
+    new_velocities = velocities + accelerations * dt
+    # 2. Update positions using NEW velocities
+    new_positions = positions + new_velocities * dt
+    return new_positions, new_velocities
+
 class SymplecticEulerIntegrator(Integrator):
     """
     Symplectic Euler (Semi-Implicit) integrator.
@@ -127,16 +141,9 @@ class SymplecticEulerIntegrator(Integrator):
         positions, velocities = state
         
         # 1. Evaluate forces using CURRENT positions
-        # (SPH will capture current velocities directly in its force_fn closure)
         accelerations = force_fn(positions, dt)
         
-        # 2. Update velocities FIRST
-        new_velocities = velocities + accelerations * dt
-        
-        # 3. Update positions using NEW velocities
-        new_positions = positions + new_velocities * dt
-        
-        return new_positions, new_velocities
+        return symplectic_euler_step_jit(positions, velocities, accelerations, dt)
 
 
 def get_integrator(name: str) -> Integrator:
