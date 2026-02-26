@@ -482,28 +482,44 @@ class FluidSimulation:
         all_pressures = np.concatenate([fluid_pressures, np.zeros(N_bound)])
         
         # 3. Pressure & Viscosity Accelerations
+        # Viscosity: Monaghan's Artificial Viscosity (Monaghan, J. J. (1992))
         grad_w = self.cubic_kernel_2d_gradient(r_vec, r_dist)
         
         # Compute per-pair pressure term and viscosity for ALL pairs
         p_term = (all_pressures[i_idx] / all_densities[i_idx]**2) + \
                  (all_pressures[j_idx] / all_densities[j_idx]**2)
         
+        cs = np.sqrt((self.stiffness * self.exponent) / self.rest_density)
+        epsilon = 0.01 * (self.smoothing_length ** 2)
+
+
         # --- Fluid-Fluid pairs: symmetric forces ---
         if np.any(ff_mask):
             fi = i_idx[ff_mask]
             fj = j_idx[ff_mask]
             pt = p_term[ff_mask]
             gw = grad_w[ff_mask]
-            w_ff = w[ff_mask]
+            r_vec_ff = r_vec[ff_mask]
+            r_dist_ff = r_dist[ff_mask]
             
-            # Pressure acceleration
+            # 1. Pressure
             a_press_ij = all_masses[fj][:, np.newaxis] * pt[:, np.newaxis] * gw
             a_press_ji = all_masses[fi][:, np.newaxis] * pt[:, np.newaxis] * -gw
             
-            # Viscosity (XSPH)
+            # 2. Viscosity
             v_rel = all_velocities[fj] - all_velocities[fi]
-            a_visc_ij = self.viscosity * (all_masses[fj] / all_densities[fj])[:, np.newaxis] * v_rel * w_ff[:, np.newaxis]
-            a_visc_ji = self.viscosity * (all_masses[fi] / all_densities[fi])[:, np.newaxis] * -v_rel * w_ff[:, np.newaxis]
+            v_dot_r = np.sum(v_rel * r_vec_ff, axis=1)
+            
+            # THE FIX: Clamp positive values to 0.0. No boolean masking needed!
+            v_dot_r_clipped = np.minimum(v_dot_r, 0.0)
+            
+            mu_ij = (self.smoothing_length * v_dot_r_clipped) / (r_dist_ff**2 + epsilon)
+            rho_ij = 0.5 * (all_densities[fi] + all_densities[fj])
+            
+            pi_ij = (-self.viscosity * cs * mu_ij) / rho_ij
+            
+            a_visc_ij = all_masses[fj][:, np.newaxis] * pi_ij[:, np.newaxis] * gw
+            a_visc_ji = all_masses[fi][:, np.newaxis] * pi_ij[:, np.newaxis] * -gw
             
             np.add.at(accelerations, fi, a_press_ij + a_visc_ij)
             np.add.at(accelerations, fj, a_press_ji + a_visc_ji)
@@ -512,39 +528,54 @@ class FluidSimulation:
         if np.any(fb_mask):
             fi = i_idx[fb_mask]
             bj = j_idx[fb_mask]
+            r_vec_fb = r_vec[fb_mask]
+            r_dist_fb = r_dist[fb_mask]
             
-            # InteractiveComputerGraphics reference: only use fluid's dpi term for boundary repulsion
+            # Pressure
             pt_fb = (all_pressures[fi] / all_densities[fi]**2)
-            
             gw = grad_w[fb_mask]
-            w_fb = w[fb_mask]
-            
             a_press = all_masses[bj][:, np.newaxis] * pt_fb[:, np.newaxis] * gw
-            # Viscosity: boundary velocity is 0, which acts as a very strong no-slip condition.
-            # We scale it down or remove it to allow slip and avoid particles getting stuck.
-            boundary_friction = 0.0 
-            v_rel = all_velocities[bj] - all_velocities[fi]
-            a_visc = (self.viscosity * boundary_friction) * (all_masses[bj] / all_densities[bj])[:, np.newaxis] * v_rel * w_fb[:, np.newaxis]
             
+            # Viscosity
+            boundary_friction = 1.0 
+            v_rel = all_velocities[bj] - all_velocities[fi]
+            v_dot_r = np.sum(v_rel * r_vec_fb, axis=1)
+            
+            v_dot_r_clipped = np.minimum(v_dot_r, 0.0)
+            
+            mu_ij = (self.smoothing_length * v_dot_r_clipped) / (r_dist_fb**2 + epsilon)
+            rho_ij = 0.5 * (all_densities[fi] + all_densities[bj])
+            
+            pi_ij = (-(self.viscosity * boundary_friction) * cs * mu_ij) / rho_ij
+            a_visc = all_masses[bj][:, np.newaxis] * pi_ij[:, np.newaxis] * gw
+                
             np.add.at(accelerations, fi, a_press + a_visc)
         
         # --- Boundary-Fluid pairs: force on fluid j from boundary i ---
         if np.any(bf_mask):
             fj = j_idx[bf_mask]
             bi = i_idx[bf_mask]
+            r_vec_bf = r_vec[bf_mask]
+            r_dist_bf = r_dist[bf_mask]
             
-            # InteractiveComputerGraphics reference: only use fluid's dpi term for boundary repulsion
+            # Pressure
             pt_bf = (all_pressures[fj] / all_densities[fj]**2)
-            
             gw = grad_w[bf_mask]
-            w_bf = w[bf_mask]
-            
-            # grad_w points from i(boundary) to j(fluid), so force on j uses -grad_w
             a_press = all_masses[bi][:, np.newaxis] * pt_bf[:, np.newaxis] * -gw
-            v_rel = all_velocities[bi] - all_velocities[fj]  # boundary(0) - fluid_vel
-            boundary_friction = 0.0
-            a_visc = (self.viscosity * boundary_friction) * (all_masses[bi] / all_densities[bi])[:, np.newaxis] * v_rel * w_bf[:, np.newaxis]
             
+            # Viscosity
+            boundary_friction = 1.0 
+            v_rel = all_velocities[fj] - all_velocities[bi]
+            v_dot_r = np.sum(v_rel * r_vec_bf, axis=1)
+            
+            v_dot_r_clipped = np.minimum(v_dot_r, 0.0)
+            
+            mu_ij = (self.smoothing_length * v_dot_r_clipped) / (r_dist_bf**2 + epsilon)
+            rho_ij = 0.5 * (all_densities[bi] + all_densities[fj])
+            
+            pi_ij = (-(self.viscosity * boundary_friction) * cs * mu_ij) / rho_ij
+            a_visc = all_masses[bi][:, np.newaxis] * pi_ij[:, np.newaxis] * -gw
+                
             np.add.at(accelerations, fj, a_press + a_visc)
         
         # 4. External Forces (Gravity) — fluid only
