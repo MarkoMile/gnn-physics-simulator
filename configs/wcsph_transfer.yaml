@@ -26,8 +26,8 @@ data:
 simulation:
   type: 'fluid'
   num_trajectories: 10
-  num_particles: 400
-  total_time: 1.0
+  num_particles: 2000
+  total_time: 2.5 # 2.5s real physical time -- 1000 trajectory length with 0.0025 dt (or 0.0005 dt with save_every=5)
   dt: 0.0005 # WCSPH needs smaller dt for stability
   save_every: 5 # 0.0005 * 5 = 0.0025 to match WaterDrop dt
   integrator: 'symplectic_euler'
@@ -41,9 +41,9 @@ simulation:
   # WCSPH specific parameters
   
   rest_density: 1000.0
-  stiffness: 10000.0 # Lowered slightly for stability with larger dt
+  stiffness: 1000.0 # Lowered slightly for stability with larger dt
   exponent: 7.0
-  viscosity: 0.1
+  viscosity: 0.3
 
 visualization:
   fps: 24

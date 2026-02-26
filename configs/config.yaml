@@ -31,10 +31,10 @@ data:
 simulation:
   type: 'fluid'               # Set to 'n_body' for space simulation, 'fluid' for WaterDrop
   num_trajectories: 1         # Just testing generation locally
-  num_particles: 600         # DeepMind WaterDrop uses 600 particles on average
-  total_time: 2.0             # 2.0s real physical time
-  dt: 0.0025                 # Integration timestep
-  save_every: 1              # sub-sample integration (1 = no sub-sampling)
+  num_particles: 2000         
+  total_time: 2.5             # 2.5s real physical time -- 1000 trajectory length with 0.0025 dt (or 0.0005 dt with save_every=5)
+  dt: 0.0005                 # Integration timestep
+  save_every: 5              # sub-sample integration (1 = no sub-sampling)
   integrator: 'symplectic_euler' # Crucial for SPH
   gravitational_constant: 9.81 # Real surface gravity magnitude
   softening_length: 0.1      # SPH Smoothing Length (h).
@@ -46,9 +46,9 @@ simulation:
   # WCSPH specific parameters
   
   rest_density: 1000.0        # Water density
-  stiffness: 35000.0           # Tait's equation gas constant
+  stiffness: 1000.0           # Tait's equation gas constant
   exponent: 7.0                # Exponent in Tait's equation
-  viscosity: 0.05
+  viscosity: 0.3
 
 visualization:
   fps: 24
