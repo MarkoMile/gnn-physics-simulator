@@ -81,7 +81,7 @@ def validate(model, val_loader, device):
         
     return total_loss / max(num_batches, 1)
 
-def train(config_path: str, use_wandb: bool = False):
+def train(config_path: str, use_wandb: bool = False, load_checkpoint: str = None):
     """
     Main training loop.
     Maps datasets, handles schedulers, checkpoints best weights, and limits step bounds.
@@ -127,12 +127,31 @@ def train(config_path: str, use_wandb: bool = False):
     # 3. Setup Optimizers & Schedulers
     optimizer = torch.optim.Adam(model.parameters(), lr=train_cfg.get('learning_rate', 1e-4))
     
+    # 4. Load Checkpoint (Optional)
+    global_step = 0
+    start_epoch = 1
+    best_val_loss = float('inf')
+
+    if load_checkpoint:
+        if os.path.exists(load_checkpoint):
+            print(f"Loading checkpoint from {load_checkpoint}...")
+            checkpoint = torch.load(load_checkpoint, map_location=device)
+            model.load_state_dict(checkpoint['model_state_dict'])
+            # Only restore optimizer/step if requested (for fine-tuning, usually want new optimizer state or reset LR)
+            # but we can optionally restore them. For now, let's just reset but we can keep global_step 
+            # if we want continuity in scheduler.
+            # However, for transfer learning, we typically start fresh with LR.
+            # global_step = checkpoint.get('global_step', 0)
+            # start_epoch = checkpoint.get('epoch', 0) + 1
+            print("Checkpoint loaded successfully.")
+        else:
+            print(f"WARNING: Checkpoint file {load_checkpoint} not found. Starting from scratch.")
+    
     # DeepMind specified an exponential decay of 0.1 over 5 million steps
     epochs = train_cfg.get('epochs', 100) # Fallback bounded epochs
     total_steps = len(train_loader) * epochs
     
     # Calculate exactly what the gamma decay multiplier should be per step to hit 0.1 exactly at 5M
-    # gamma^(5,000,000) = 0.1  -->  gamma = 0.1^(1/5,000,000)
     decay_steps = train_cfg.get('lr_decay_steps', 5_000_000)
     gamma = 0.1 ** (1.0 / decay_steps)
     scheduler = ExponentialLR(optimizer, gamma=gamma)
@@ -140,15 +159,13 @@ def train(config_path: str, use_wandb: bool = False):
     # DeepMind specifies training bounds of roughly 20 Million gradient updates
     max_training_steps = 20_000_000
     
-    # 4. Training Loop Variables
-    global_step = 0
-    best_val_loss = float('inf')
+    # 5. Training Loop Variables
     save_dir = "checkpoints"
     os.makedirs(save_dir, exist_ok=True)
     
     print(f"\nBeginning Training (Max Steps: {max_training_steps:,})")
     
-    for epoch in range(1, epochs + 1):
+    for epoch in range(start_epoch, epochs + 1):
         epoch_loss = 0.0
         
         # Wrapping loader in TQDM for a beautiful progress bar
@@ -189,7 +206,7 @@ def train(config_path: str, use_wandb: bool = False):
                 "val/loss": val_loss
             })
             
-        # 5. Checkpoint best model
+        # 6. Checkpoint best model
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             
@@ -214,8 +231,9 @@ def train(config_path: str, use_wandb: bool = False):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train the GNN Physics Simulator")
-    parser.add_config = parser.add_argument("--config", type=str, default="config.yaml", help="Path to config file")
+    parser.add_argument("--config", type=str, default="configs/config.yaml", help="Path to config file")
     parser.add_argument("--wandb", action="store_true", help="Enable Weights & Biases logging")
+    parser.add_argument("--load", type=str, default=None, help="Path to checkpoint to load")
     
     args = parser.parse_args()
-    train(args.config, args.wandb)
+    train(args.config, args.wandb, args.load)
