@@ -335,12 +335,18 @@ class FluidSimulation:
 
     def initialize_random_state(
         self,
-        position_scale: float = 1.0,
+        position_scale: Optional[float] = None,
         velocity_scale: float = 0.1,
         mass_range: Tuple[float, float] = (1.0, 1.0), # Uniform mass in fluid
         start: Tuple[float,float] = (0.0, 0.5) # Starting position of the drop center
     ):
         """Initializes a uniform clustered 'Water Drop' layout near the top of the box."""
+        if position_scale is not None:
+            self.position_scale = position_scale
+        
+        # Use local variable for convenience in formulas
+        pos_scale = self.position_scale
+
         # Calculate optimal uniform spacing to satisfy rest_density mathematically
         # In SPH, fluid particles must spawn at a specific spacing relative to h 
         # to ensure the initial density evaluates to rest_density (not overlapping, not a void).
@@ -350,7 +356,7 @@ class FluidSimulation:
         # Evaluate how much area the set of particles will logically occupy
         # based on geometry vs maximum available container space.
         required_area = self.num_particles * (spacing ** 2)
-        total_container_area = (2.0 * position_scale) ** 2
+        total_container_area = (2.0 * pos_scale) ** 2
         max_allowed_area = 0.90 * total_container_area
         
         if required_area > max_allowed_area:
@@ -374,9 +380,9 @@ class FluidSimulation:
         start_x = start[0] - grid_width / 2.0
         start_y = start[1] - grid_height / 2.0
 
-        # Clip to ensure the entire grid fits inside [-position_scale, position_scale]
-        start_x = np.clip(start_x, -position_scale, position_scale - grid_width)
-        start_y = np.clip(start_y, -position_scale, position_scale - grid_height)
+        # Clip to ensure the entire grid fits inside [-pos_scale, pos_scale]
+        start_x = np.clip(start_x, -pos_scale, pos_scale - grid_width)
+        start_y = np.clip(start_y, -pos_scale, pos_scale - grid_height)
         
         for i in range(self.num_particles):
             row = i // cols
