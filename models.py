@@ -64,7 +64,7 @@ class GNNSimulator(nn.Module):
     @classmethod
     def from_config(cls, config: Dict[str, Any]) -> 'GNNSimulator':
         """
-        Instantiate the GNNSimulator dynamically from the loaded project config.yaml dictionary.
+        Instantiate the GNNSimulator dynamically from the loaded project configs/config.yaml dictionary.
         Automatically mathematically derives the matrix sizing constraints from sequence lengths and dimensionality.
         """
         model_cfg = config['model']

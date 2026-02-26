@@ -6,14 +6,16 @@ A PyTorch Geometric implementation of [Learning to Simulate Complex Physics with
 
 ```
 gnn-physics-simulator/
-├── config.yaml              # Central configuration (model, training, data, simulation)
+├── configs/
+│   ├── config.yaml          # Central configuration (model, training, data, simulation)
+│   └── wcsph_transfer.yaml  # WCSph transfer learning parameters
 ├── models.py                # GNNSimulator: Encoder → Processor → Decoder architecture
 ├── dataset.py               # ParticleDataset: TFRecord/NPZ loading, noise injection, graph building
 ├── train.py                 # Training loop: normalized loss, LR decay, checkpointing
 ├── simulation.py            # N-Body & Fluid (pseudo-SPH) generators with dataset export
 ├── integrators.py           # Euler, RK4 numerical integrators
 ├── scripts/
-│   ├── generate_dataset.py  # CLI to generate synthetic datasets from config.yaml
+│   ├── generate_dataset.py  # CLI to generate synthetic datasets from configs/config.yaml
 │   └── download_dataset.py  # Download DeepMind datasets (WaterDrop, etc.)
 ├── utils/
 │   ├── train_kaggle.ipynb           # Kaggle notebook: train on full WaterDrop dataset
@@ -46,20 +48,20 @@ pip install -r requirements.txt
 python scripts/download_dataset.py
 
 # 2. Train the model
-python train.py --config config.yaml
+python train.py --config configs/config.yaml
 
 # With Weights & Biases logging:
-python train.py --config config.yaml --wandb
+python train.py --config configs/config.yaml --wandb
 ```
 
 ### Generate and Train on Synthetic Data (WIP)
 
 ```bash
-# Generate an N-Body or Fluid dataset from config.yaml
-python scripts/generate_dataset.py --config config.yaml --output data/Generated
+# Generate an N-Body or Fluid dataset from configs/config.yaml
+python scripts/generate_dataset.py --config configs/config.yaml --output data/Generated
 
-# Train on the generated data (set dataset_path and dataset_format in config.yaml)
-python train.py --config config.yaml
+# Train on the generated data (set dataset_path and dataset_format in configs/config.yaml)
+python train.py --config configs/config.yaml
 ```
 
 ### Train on Kaggle (GPU)
@@ -80,9 +82,9 @@ The GNN simulator follows DeepMind's Encode-Process-Decode architecture:
 
 ## Configuration
 
-All parameters are centralized in `config.yaml`:
+All parameters are centralized in `configs/config.yaml`:
 
-See [config.yaml](config.yaml).
+See [configs/config.yaml](configs/config.yaml).
 
 ## Simulation Types (WIP)
 
