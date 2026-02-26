@@ -9,9 +9,9 @@ __pycache__/
 venv/
 env/
 
-# Data & checkpoints (large files)
+# Data & deprecated checkpoints (large files)
 data/
-checkpoints/
+checkpoints/.deprecated
 wandb/
 
 # Jupyter
