@@ -241,9 +241,11 @@ def train(config_path: str, use_wandb: bool = False, load_checkpoint: str = None
                 print(f"--> Saved improved checkpoint to {save_path}")
             
             if use_wandb:
-                wandb.save(save_path, base_path=save_dir, policy="now")
+                artifact = wandb.Artifact(name="best_model", type="model")
+                artifact.add_file(save_path)
+                wandb.log_artifact(artifact, aliases=["latest", "best", f"epoch_{epoch}"])
                 if not quiet:
-                    print(f"--> Uploaded best checkpoint to WandB")
+                    print(f"--> Uploaded best checkpoint to WandB as artifact")
                 
         if global_step >= max_training_steps:
             break
