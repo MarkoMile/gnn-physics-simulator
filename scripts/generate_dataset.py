@@ -14,6 +14,7 @@ def main():
                         help="Path to YAML configuration file")
     parser.add_argument("--output", "-o", type=str, default="data/processed",
                         help="Path to save the generated dataset")
+    parser.add_argument("--quiet", action="store_true", help="Disable progress bars and reduce output")
     args = parser.parse_args()
     
     config_path = args.config
@@ -21,7 +22,8 @@ def main():
     if not os.path.exists(config_path) and os.path.exists(os.path.basename(config_path)):
         config_path = os.path.basename(config_path)
         
-    print(f"Loading configuration from: {config_path}")
+    if not args.quiet:
+        print(f"Loading configuration from: {config_path}")
     with open(config_path, "r") as f:
         config = yaml.safe_load(f)
         
@@ -30,8 +32,9 @@ def main():
         
     sim_cfg = config["simulation"]
     
-    print(f"Generating {sim_cfg['num_trajectories']} trajectories...")
-    print(f"Particles: {sim_cfg['num_particles']} | Time: {sim_cfg['total_time']}s | dt: {sim_cfg['dt']}")
+    if not args.quiet:
+        print(f"Generating {sim_cfg['num_trajectories']} trajectories...")
+        print(f"Particles: {sim_cfg['num_particles']} | Time: {sim_cfg['total_time']}s | dt: {sim_cfg['dt']}")
     
     generate_dataset(
         num_trajectories=sim_cfg['num_trajectories'],
@@ -50,10 +53,12 @@ def main():
         connectivity_radius=config.get('data', {}).get('connectivity_radius', 0.015),
         rest_density=sim_cfg.get('rest_density', 1000.0),
         stiffness=sim_cfg.get('stiffness', 2000.0),
-        viscosity=sim_cfg.get('viscosity', 200.0)
+        viscosity=sim_cfg.get('viscosity', 200.0),
+        quiet=args.quiet
     )
     
-    print(f"\nDataset successfully generated and saved to {args.output}")
+    if not args.quiet:
+        print(f"\nDataset successfully generated and saved to {args.output}")
 
 if __name__ == "__main__":
     main()

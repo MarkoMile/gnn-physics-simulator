@@ -34,7 +34,7 @@ OFFSET = 0.1                   # Coordinate shift to align with WaterDrop bounds
 PARTICLE_TYPE_FLUID = 5        # DeepMind's encoding for fluid particles
 
 
-def run_trajectory(num_particles: int, seed: int) -> dict:
+def run_trajectory(num_particles: int, seed: int, quiet: bool = False) -> dict:
     """Run a single WCSPH trajectory and return it."""
     rng = np.random.RandomState(seed)
     
@@ -70,6 +70,7 @@ def run_trajectory(num_particles: int, seed: int) -> dict:
         total_time=total_time,
         dt=INTEGRATION_DT,
         save_every=SAVE_EVERY,
+        quiet=quiet
     )
 
     # Trim to exactly SEQUENCE_LENGTH if the simulator produced extra frames
@@ -95,6 +96,7 @@ def generate_dataset(
     min_particles: int,
     max_particles: int,
     seed: int,
+    quiet: bool = False
 ):
     """Generate full train/valid/test dataset."""
     os.makedirs(output_dir, exist_ok=True)
@@ -107,12 +109,14 @@ def generate_dataset(
 
     trajectories = []
     from tqdm.auto import tqdm
-    for i in tqdm(range(total), desc="Generating WCSPH trajectories"):
+    for i in tqdm(range(total), desc="Generating WCSPH trajectories", disable=quiet):
         n = int(particle_counts[i])
-        print(f"\n[Trajectory {i+1}/{total}] particles={n}, seed={traj_seeds[i]}")
-        traj = run_trajectory(n, int(traj_seeds[i]))
+        if not quiet:
+            print(f"\n[Trajectory {i+1}/{total}] particles={n}, seed={traj_seeds[i]}")
+        traj = run_trajectory(n, int(traj_seeds[i]), quiet=quiet)
         trajectories.append(traj)
-        print(f"  → pos range: [{traj['position'].min():.4f}, {traj['position'].max():.4f}]")
+        if not quiet:
+            print(f"  → pos range: [{traj['position'].min():.4f}, {traj['position'].max():.4f}]")
 
     # Split
     splits = {
@@ -150,9 +154,11 @@ def generate_dataset(
     meta_path = os.path.join(output_dir, "metadata.json")
     with open(meta_path, "w") as f:
         json.dump(metadata, f, indent=2)
-    print(f"\nSaved metadata → {meta_path}")
-    print(f"  vel_mean={metadata['vel_mean']}, vel_std={metadata['vel_std']}")
-    print(f"  acc_mean={metadata['acc_mean']}, acc_std={metadata['acc_std']}")
+    
+    if not quiet:
+        print(f"\nSaved metadata → {meta_path}")
+        print(f"  vel_mean={metadata['vel_mean']}, vel_std={metadata['vel_std']}")
+        print(f"  acc_mean={metadata['acc_mean']}, acc_std={metadata['acc_std']}")
 
     # Save splits as .npz (format matches load_raw_data's npz loader)
     for split_name, split_trajs in splits.items():
@@ -161,7 +167,8 @@ def generate_dataset(
         save_dict = {f"trajectory_{i}": traj for i, traj in enumerate(split_trajs)}
         out_path = os.path.join(output_dir, f"{split_name}.npz")
         np.savez_compressed(out_path, **save_dict)
-        print(f"Saved {split_name} ({len(split_trajs)} trajectories) → {out_path}")
+        if not quiet:
+            print(f"Saved {split_name} ({len(split_trajs)} trajectories) → {out_path}")
 
 
 def main():
@@ -183,22 +190,24 @@ def main():
                         help="Maximum particles per trajectory")
     parser.add_argument("--seed", type=int, default=42,
                         help="Random seed for reproducibility")
+    parser.add_argument("--quiet", action="store_true", help="Disable progress bars and reduce output")
 
     args = parser.parse_args()
 
-    print("=" * 60)
-    print("WCSPH Dataset Generator")
-    print("=" * 60)
-    print(f"  Output:         {args.output}")
-    print(f"  Trajectories:   {args.num_train} train / {args.num_valid} valid / {args.num_test} test")
-    print(f"  Particles:      {args.min_particles}-{args.max_particles}")
-    print(f"  Sequence length: {SEQUENCE_LENGTH} frames")
-    print(f"  Effective dt:   {WATERDROP_DT}")
-    print(f"  Smoothing h:    {SMOOTHING_LENGTH}")
-    print(f"  Bounds:         {WATERDROP_BOUNDS}")
-    print(f"  Particle type:  {PARTICLE_TYPE_FLUID}")
-    print(f"  Seed:           {args.seed}")
-    print("=" * 60)
+    if not args.quiet:
+        print("=" * 60)
+        print("WCSPH Dataset Generator")
+        print("=" * 60)
+        print(f"  Output:         {args.output}")
+        print(f"  Trajectories:   {args.num_train} train / {args.num_valid} valid / {args.num_test} test")
+        print(f"  Particles:      {args.min_particles}-{args.max_particles}")
+        print(f"  Sequence length: {SEQUENCE_LENGTH} frames")
+        print(f"  Effective dt:   {WATERDROP_DT}")
+        print(f"  Smoothing h:    {SMOOTHING_LENGTH}")
+        print(f"  Bounds:         {WATERDROP_BOUNDS}")
+        print(f"  Particle type:  {PARTICLE_TYPE_FLUID}")
+        print(f"  Seed:           {args.seed}")
+        print("=" * 60)
 
     generate_dataset(
         output_dir=args.output,
@@ -208,9 +217,11 @@ def main():
         min_particles=args.min_particles,
         max_particles=args.max_particles,
         seed=args.seed,
+        quiet=args.quiet
     )
 
-    print("\nDataset generation complete!")
+    if not args.quiet:
+        print("\nDataset generation complete!")
 
 
 if __name__ == "__main__":

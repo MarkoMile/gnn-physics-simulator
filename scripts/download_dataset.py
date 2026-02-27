@@ -24,12 +24,14 @@ import sys
 import urllib.request
 import urllib.error
 
-def download_file(url, output_path):
+def download_file(url, output_path, quiet=False):
     """Downloads a file from a URL to a local path."""
-    print(f"Downloading {url} to {output_path}...")
+    if not quiet:
+        print(f"Downloading {url} to {output_path}...")
     try:
         urllib.request.urlretrieve(url, output_path)
-        print("Done.")
+        if not quiet:
+            print("Done.")
     except urllib.error.URLError as e:
         print(f"Error downloading {url}: {e}", file=sys.stderr)
         # We don't exit here because we might want to try other files or just report the error
@@ -44,6 +46,7 @@ def main():
     parser = argparse.ArgumentParser(description="Download dataset for GNN Physics Simulator.")
     parser.add_argument("dataset_name", help="Name of the dataset to download (e.g., WaterDrop)")
     parser.add_argument("--output_dir", help="Directory where the dataset will be saved (default: project_root/data/)")
+    parser.add_argument("--quiet", action="store_true", help="Disable output")
     
     args = parser.parse_args()
     
@@ -78,7 +81,7 @@ def main():
     for filename in files_to_download:
         file_url = f"{base_url}{filename}"
         output_path = os.path.join(output_dir, filename)
-        download_file(file_url, output_path)
+        download_file(file_url, output_path, quiet=args.quiet)
 
 if __name__ == "__main__":
     main()

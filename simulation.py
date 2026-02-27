@@ -99,7 +99,8 @@ class NBodySimulation:
         self,
         total_time: float,
         dt: float,
-        save_every: int = 1
+        save_every: int = 1,
+        quiet: bool = False
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Run the simulation.
@@ -108,6 +109,7 @@ class NBodySimulation:
             total_time: Total simulation time
             dt: Time step
             save_every: Save state every N steps
+            quiet: If True, disable tqdm progress bar
             
         Returns:
             Tuple of (positions, velocities, times) arrays
@@ -134,7 +136,7 @@ class NBodySimulation:
             
         save_idx = 0
         from tqdm.auto import tqdm
-        for step in tqdm(range(total_steps + 1), desc="N-Body Simulation Progress", leave=False):
+        for step in tqdm(range(total_steps + 1), desc="N-Body Simulation Progress", leave=False, disable=quiet):
             # Save current state
             if step % save_every == 0:
                 history_positions[save_idx] = pos
@@ -701,12 +703,12 @@ class FluidSimulation:
             
         return positions, velocities
 
-    def simulate(self, total_time: float, dt: float, save_every: int = 1) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    def simulate(self, total_time: float, dt: float, save_every: int = 1, quiet: bool = False) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         # Formally validate Courant-Friedrichs-Lewy (CFL) stability for acoustic waves
         c_s = np.sqrt((self.stiffness * self.exponent) / self.rest_density)
         max_dt = 0.4 * (self.smoothing_length / c_s)
         
-        if dt > max_dt:
+        if dt > max_dt and not quiet:
             print(f"WARNING: Provided dt={dt} violates the CFL condition (max_dt={max_dt:.5f} for h={self.smoothing_length}, cs={c_s:.2f}).")
             print("The simulation may be numerically unstable and explode. Consider drastically lowering dt or stiffness.")
             
@@ -726,7 +728,7 @@ class FluidSimulation:
             
         save_idx = 0
         from tqdm.auto import tqdm
-        for step in tqdm(range(total_steps + 1), desc="Fluid Simulation Progress", leave=False):
+        for step in tqdm(range(total_steps + 1), desc="Fluid Simulation Progress", leave=False, disable=quiet):
             if step % save_every == 0:
                 history_positions[save_idx] = pos
                 history_velocities[save_idx] = vel
@@ -782,6 +784,7 @@ def generate_dataset(
     dt: float,
     integrator: str = 'rk4',
     save_path: str = None,
+    quiet: bool = False,
     **simulation_kwargs
 ) -> Dict[str, Any]:
     """
@@ -794,6 +797,7 @@ def generate_dataset(
         dt: Time step
         integrator: Integration method
         save_path: Optional path to save dataset
+        quiet: If True, disable tqdm progress bar
         **simulation_kwargs: Additional simulation parameters
         
     Returns:
@@ -813,7 +817,7 @@ def generate_dataset(
     
     trajectories = []
     
-    for _ in tqdm(range(num_trajectories), desc=f"Generating {simulation_type} Trajectories"):
+    for _ in tqdm(range(num_trajectories), desc=f"Generating {simulation_type} Trajectories", disable=quiet):
         if simulation_type == 'fluid':
             sim = FluidSimulation(
                 num_particles=num_particles,
@@ -842,7 +846,8 @@ def generate_dataset(
         history_positions, history_velocities, _ = sim.simulate(
             total_time=total_time,
             dt=dt,
-            save_every=save_every
+            save_every=save_every,
+            quiet=quiet
         )
         
         # Save trajectory in a format mimicking DeepMind's TFRecords

@@ -81,7 +81,7 @@ def validate(model, val_loader, device):
         
     return total_loss / max(num_batches, 1)
 
-def train(config_path: str, use_wandb: bool = False, load_checkpoint: str = None):
+def train(config_path: str, use_wandb: bool = False, load_checkpoint: str = None, quiet: bool = False):
     """
     Main training loop.
     Maps datasets, handles schedulers, checkpoints best weights, and limits step bounds.
@@ -91,7 +91,8 @@ def train(config_path: str, use_wandb: bool = False, load_checkpoint: str = None
         
     set_seed()
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(f"Training on device: {device}")
+    if not quiet:
+        print(f"Training on device: {device}")
     
     if use_wandb:
         import wandb
@@ -101,7 +102,8 @@ def train(config_path: str, use_wandb: bool = False, load_checkpoint: str = None
     data_cfg = config['data']
     train_cfg = config['training']
     
-    print("\nLoading Datasets...")
+    if not quiet:
+        print("\nLoading Datasets...")
     # Initialize the raw splits utilizing the random-walk dataset implementations
     train_dataset = ParticleDataset(data_cfg['dataset_path'], split='train', dataset_format=data_cfg['dataset_format'], noise_std=train_cfg.get('noise_std', 3e-4))
     valid_dataset = ParticleDataset(data_cfg['dataset_path'], split='valid', dataset_format=data_cfg['dataset_format'], noise_std=0.0) # No noise in evaluation!
@@ -121,7 +123,8 @@ def train(config_path: str, use_wandb: bool = False, load_checkpoint: str = None
     )
     
     # 2. Initialize Model
-    print("Building GNNSimulator Network...")
+    if not quiet:
+        print("Building GNNSimulator Network...")
     model = GNNSimulator.from_config(config).to(device)
     
     # 3. Setup Optimizers & Schedulers
@@ -134,7 +137,8 @@ def train(config_path: str, use_wandb: bool = False, load_checkpoint: str = None
 
     if load_checkpoint:
         if os.path.exists(load_checkpoint):
-            print(f"Loading checkpoint from {load_checkpoint}...")
+            if not quiet:
+                print(f"Loading checkpoint from {load_checkpoint}...")
             checkpoint = torch.load(load_checkpoint, map_location=device)
             model.load_state_dict(checkpoint['model_state_dict'])
             # Only restore optimizer/step if requested (for fine-tuning, usually want new optimizer state or reset LR)
@@ -143,7 +147,8 @@ def train(config_path: str, use_wandb: bool = False, load_checkpoint: str = None
             # However, for transfer learning, we typically start fresh with LR.
             # global_step = checkpoint.get('global_step', 0)
             # start_epoch = checkpoint.get('epoch', 0) + 1
-            print("Checkpoint loaded successfully.")
+            if not quiet:
+                print("Checkpoint loaded successfully.")
         else:
             print(f"WARNING: Checkpoint file {load_checkpoint} not found. Starting from scratch.")
     
@@ -163,15 +168,19 @@ def train(config_path: str, use_wandb: bool = False, load_checkpoint: str = None
     save_dir = "checkpoints"
     os.makedirs(save_dir, exist_ok=True)
     
-    print(f"\nBeginning Training (Max Steps: {max_training_steps:,})")
+    if not quiet:
+        print(f"\nBeginning Training (Max Steps: {max_training_steps:,})")
     
     for epoch in range(start_epoch, epochs + 1):
         epoch_loss = 0.0
         
         # Wrapping loader in TQDM for a beautiful progress bar
-        progress_bar = tqdm(train_loader, desc=f"Epoch {epoch}/{epochs}")
+        if quiet:
+            loader = train_loader
+        else:
+            loader = tqdm(train_loader, desc=f"Epoch {epoch}/{epochs}")
         
-        for batch in progress_bar:
+        for batch in loader:
             if global_step >= max_training_steps:
                 print(f"Reached absolute step limit of {max_training_steps}. Halting.")
                 break
@@ -184,7 +193,8 @@ def train(config_path: str, use_wandb: bool = False, load_checkpoint: str = None
             
             # Update progress bar trailing dictionary
             current_lr = scheduler.get_last_lr()[0]
-            progress_bar.set_postfix({'loss': f"{loss:.4f}", 'lr': f"{current_lr:.2e}"})
+            if not quiet:
+                loader.set_postfix({'loss': f"{loss:.4f}", 'lr': f"{current_lr:.2e}"})
             
             if use_wandb and global_step % 50 == 0:
                 wandb.log({
@@ -197,7 +207,7 @@ def train(config_path: str, use_wandb: bool = False, load_checkpoint: str = None
         avg_train_loss = epoch_loss / len(train_loader)
         val_loss = validate(model, val_loader, device)
         
-        print(f"\nEpoch {epoch} Results | Train Loss: {avg_train_loss:.5f} | Valid Loss: {val_loss:.5f}")
+        print(f"Epoch {epoch}/{epochs} | Step {global_step} | Train Loss: {avg_train_loss:.5f} | Valid Loss: {val_loss:.5f} | LR: {scheduler.get_last_lr()[0]:.2e}")
         
         if use_wandb:
             wandb.log({
@@ -219,7 +229,8 @@ def train(config_path: str, use_wandb: bool = False, load_checkpoint: str = None
                 'val_loss': best_val_loss,
                 'config': config
             }, save_path)
-            print(f"--> Saved improved checkpoint to {save_path}")
+            if not quiet:
+                print(f"--> Saved improved checkpoint to {save_path}")
                 
         if global_step >= max_training_steps:
             break
@@ -234,6 +245,7 @@ if __name__ == "__main__":
     parser.add_argument("--config", type=str, default="configs/config.yaml", help="Path to config file")
     parser.add_argument("--wandb", action="store_true", help="Enable Weights & Biases logging")
     parser.add_argument("--load", type=str, default=None, help="Path to checkpoint to load")
+    parser.add_argument("--quiet", action="store_true", help="Reduce output verbosity and disable tqdm")
     
     args = parser.parse_args()
-    train(args.config, args.wandb, args.load)
+    train(args.config, args.wandb, args.load, args.quiet)
