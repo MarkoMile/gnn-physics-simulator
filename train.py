@@ -141,6 +141,14 @@ def train(config_path: str, use_wandb: bool = False, load_checkpoint: str = None
                 print(f"Loading checkpoint from {load_checkpoint}...")
             checkpoint = torch.load(load_checkpoint, map_location=device)
             model.load_state_dict(checkpoint['model_state_dict'])
+            
+            # Reset Normalizer statistics to prevent "stat-shock" when fine-tuning on a different dataset
+            for normalizer in [model.node_normalizer, model.edge_normalizer, model.output_normalizer]:
+                normalizer.acc_count.zero_()
+                normalizer.num_accumulations.zero_()
+                normalizer.acc_sum.zero_()
+                normalizer.acc_sum_squared.zero_()
+                
             # Only restore optimizer/step if requested (for fine-tuning, usually want new optimizer state or reset LR)
             # but we can optionally restore them. For now, let's just reset but we can keep global_step 
             # if we want continuity in scheduler.
@@ -148,7 +156,7 @@ def train(config_path: str, use_wandb: bool = False, load_checkpoint: str = None
             # global_step = checkpoint.get('global_step', 0)
             # start_epoch = checkpoint.get('epoch', 0) + 1
             if not quiet:
-                print("Checkpoint loaded successfully.")
+                print("Checkpoint loaded and Normalizer statistics reset successfully.")
         else:
             print(f"WARNING: Checkpoint file {load_checkpoint} not found. Starting from scratch.")
     
