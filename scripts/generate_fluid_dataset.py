@@ -38,8 +38,8 @@ def run_trajectory(num_particles: int, seed: int, quiet: bool = False) -> dict:
     """Run a single WCSPH trajectory and return it."""
     rng = np.random.RandomState(seed)
     
-    # Total simulation time to produce SEQUENCE_LENGTH frames
-    total_time = (SEQUENCE_LENGTH - 1) * SAVE_EVERY * INTEGRATION_DT
+    # Total simulation time to produce SEQUENCE_LENGTH + 1 frames
+    total_time = SEQUENCE_LENGTH * SAVE_EVERY * INTEGRATION_DT
 
     sim = FluidSimulation(
         num_particles=num_particles,
@@ -66,19 +66,22 @@ def run_trajectory(num_particles: int, seed: int, quiet: bool = False) -> dict:
         start=(cx, cy),
     )
 
-    positions, velocities, _ = sim.simulate(
+    positions, _, _ = sim.simulate(
         total_time=total_time,
         dt=INTEGRATION_DT,
         save_every=SAVE_EVERY,
         quiet=quiet
     )
 
-    # Trim to exactly SEQUENCE_LENGTH if the simulator produced extra frames
-    positions = positions[:SEQUENCE_LENGTH]
-    velocities = velocities[:SEQUENCE_LENGTH]
+    # Trim to exactly SEQUENCE_LENGTH + 1 if the simulator produced extra frames
+    positions = positions[:SEQUENCE_LENGTH + 1]
 
     # Shift coordinates by OFFSET so [0, 0.8] → [0.1, 0.9]
     positions = positions + OFFSET
+    
+    # Compute spatial frame deltas to match DeepMind's WaterDrop dataset format exactly
+    velocities = positions[1:] - positions[:-1]
+    positions = positions[1:]
 
     return {
         'position': positions.astype(np.float32),

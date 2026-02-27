@@ -843,18 +843,23 @@ def generate_dataset(
             mass_range=mass_range
         )
         
-        history_positions, history_velocities, _ = sim.simulate(
+        history_positions, _, _ = sim.simulate(
             total_time=total_time,
             dt=dt,
             save_every=save_every,
             quiet=quiet
         )
         
+        # Derive velocities as spatial frame deltas to match DeepMind format: v_t = p_t - p_{t-1}
+        # This makes accelerations (v_t - v_{t-1}) the second-order position differences.
+        velocities = history_positions[1:] - history_positions[:-1]
+        synced_positions = history_positions[1:]
+
         # Save trajectory in a format mimicking DeepMind's TFRecords
         traj_data = {
-            'particle_type': np.zeros(num_particles, dtype=np.int64),  # Type 0 for all gravitational particles
-            'position': history_positions.astype(np.float32),
-            'velocity': history_velocities.astype(np.float32),
+            'particle_type': np.full(num_particles, 5 if simulation_type == 'fluid' else 0, dtype=np.int64),
+            'position': synced_positions.astype(np.float32),
+            'velocity': velocities.astype(np.float32),
             'mass': sim.masses.astype(np.float32)
         }
         trajectories.append(traj_data)
@@ -894,9 +899,9 @@ def save_dataset(dataset: Dict[str, Any], save_path: str, save_dt: float,
     trajectories = dataset['trajectories']
     dim = trajectories[0]['position'].shape[-1]
     
-    # Compute global kinematic stats using the actual stored velocities
+    # Compute global kinematic stats using the stored spatial deltas
     for traj in trajectories:
-        vel = traj['velocity']  # Use real integrator velocities, not position deltas
+        vel = traj['velocity'] 
         acc = vel[1:] - vel[:-1]
         
         all_vels.append(vel.reshape(-1, dim))
