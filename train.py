@@ -241,7 +241,7 @@ def train(config_path: str, use_wandb: bool = False, load_checkpoint: str = None
                 print(f"--> Saved improved checkpoint to {save_path}")
             
             if use_wandb:
-                wandb.save(save_path)
+                wandb.save(save_path, base_path=save_dir, policy="now")
                 if not quiet:
                     print(f"--> Uploaded best checkpoint to WandB")
                 
