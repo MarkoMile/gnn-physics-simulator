@@ -231,6 +231,11 @@ def train(config_path: str, use_wandb: bool = False, load_checkpoint: str = None
             }, save_path)
             if not quiet:
                 print(f"--> Saved improved checkpoint to {save_path}")
+            
+            if use_wandb:
+                wandb.save(save_path)
+                if not quiet:
+                    print(f"--> Uploaded best checkpoint to WandB")
                 
         if global_step >= max_training_steps:
             break
