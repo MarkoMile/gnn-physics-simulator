@@ -12,6 +12,7 @@ env/
 # Data & deprecated checkpoints (large files)
 data/
 checkpoints/.deprecated
+checkpoints/.bckp
 wandb/
 
 # Jupyter
