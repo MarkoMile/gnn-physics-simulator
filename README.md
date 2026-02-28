@@ -98,7 +98,11 @@ All hyper-parameters, training details, and simulation setup variables are centr
 ## References
 
 - [Learning to Simulate Complex Physics with Graph Networks](https://arxiv.org/abs/2002.09405) — Sanchez-Gonzalez et al., 2020
-- [Interaction Networks for Learning about Objects, Relations and Physics](https://arxiv.org/abs/1612.00222)
+- [Interaction Networks for Learning about Objects, Relations and Physics](https://arxiv.org/abs/1612.00222) — Battaglia et al., 2016
+- [Simulating Free Surface Flows with SPH](https://doi.org/10.1006/jcph.1994.1034) — Monaghan, 1994
+- [Weakly compressible SPH for free surface flows](https://diglib.eg.org/server/api/core/bitstreams/df5651a7-e578-4db9-a056-c8c36e925067/content) — Becker & Teschner, 2007
+- [Versatile Rigid-Fluid Coupling for Incompressible SPH](https://dl.acm.org/doi/10.1145/2185520.2185558) — Akinci et al., 2012
+- [Particle-Based Fluid Simulation for Interactive Applications](https://matthias-research.github.io/pages/publications/sca03.pdf) — Müller et al., 2003
 
 ## License
 
