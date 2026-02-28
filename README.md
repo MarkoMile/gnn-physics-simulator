@@ -1,6 +1,8 @@
-# GNN Physics Simulator
+# Graph Neural Networks for Simulating Physics
 
-A PyTorch Geometric implementation of [Learning to Simulate Complex Physics with Graph Networks](https://arxiv.org/abs/2002.09405) (Sanchez-Gonzalez et al., 2020). Trains a Graph Neural Network to predict particle accelerations from local interactions, reproducing DeepMind's architecture for simulating fluids, rigid bodies, and gravitational systems, with additional support for fine-tuning on custom-generated Weakly Compressible SPH (WCSPH) datasets.
+![WCSPH vs GNN Comparison](media/wcsph-gnn-comparison.gif)
+
+A PyTorch Geometric implementation of [Learning to Simulate Complex Physics with Graph Networks](https://arxiv.org/abs/2002.09405) (Sanchez-Gonzalez et al., 2020). Trains a Graph Neural Network to predict particle accelerations from local interactions, reproducing DeepMind's architecture for simulating fluids, with additional fine-tuning on a custom-generated Weakly Compressible SPH (WCSPH) dataset.
 
 This project was developed as an optional assignment for the course **Numerical Algorithms and Numerical Software (E231)** at the Faculty of Technical Sciences, University of Novi Sad. It contrasts classic physically grounded numerical integrators against deep learning Message-Passing approaches.
 
@@ -29,10 +31,11 @@ gnn-physics-simulator/
 ├── utils/
 │   ├── train_kaggle.ipynb           # Kaggle notebook: train on full WaterDrop dataset
 │   └── train_generated_kaggle.ipynb # Kaggle notebook: generate + train synthetic data
-└── data/                    # Dataset directory 
-└── checkpoints/             # Saved model weights and training states (.pt files)
-    ├── best_model_wcsph.pt  # Model weights after WCSPH fine-tuning
-    └── best_model.pt        # Model weights after pre-training on WaterDrop dataset
+├── data/                    # Dataset directory 
+├── checkpoints/             # Saved model weights and training states (.pt files)
+│   ├── best_model_wcsph.pt  # Model weights after WCSPH fine-tuning
+│   └── best_model.pt        # Model weights after pre-training on WaterDrop dataset
+└── media/                   # Saved animations and comparison GIFs
 ```
 
 ## Core Features & Methodology
