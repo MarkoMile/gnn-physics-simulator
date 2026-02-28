@@ -1,0 +1,54 @@
+# Default configuration from "Learning to Simulate Complex Physics with Graph Networks" (Sanchez-Gonzalez et al. 2020)
+# https://arxiv.org/abs/2002.09405
+
+model:
+  message_passing_steps: 10
+  hidden_dim: 128
+  num_mlp_layers: 2
+  activation: 'relu'
+
+# Smaller training length for this project
+
+training:
+  epochs: 5
+  batch_size: 2
+  learning_rate: 1.0e-4
+  lr_decay_rate: 0.1
+  lr_decay_steps: 5000000
+  noise_std: 3.0e-4
+  optimizer: 'adam'
+
+data:
+  history_window: 5
+  connectivity_radius: 0.015
+  spatial_dim: 2
+  dataset_path: 'data/WaterDropSample'
+  dataset_format: 'tfrecord' # Options: 'npz' (native Python) or 'tfrecord' (DeepMind)
+
+
+# Simulation config (for generating dataset)
+
+simulation:
+  type: 'fluid'               # Set to 'n_body' for space simulation, 'fluid' for WaterDrop
+  num_trajectories: 1         # Just testing generation locally
+  num_particles: 2000         
+  total_time: 2.5             # 2.5s real physical time -- 1000 trajectory length with 0.0025 dt (or 0.0005 dt with save_every=5)
+  dt: 0.0005                 # Integration timestep
+  save_every: 5              # sub-sample integration (1 = no sub-sampling)
+  integrator: 'symplectic_euler' # Crucial for SPH
+  gravitational_constant: 9.81 # Real surface gravity magnitude
+  softening_length: 0.1      # SPH Smoothing Length (h).
+  position_scale: 1.0         # Container edge length is 1.0
+  velocity_scale: 0.0         # Start from rest
+  mass_range_min: 1.0         # Ignored in fluid (auto-computed from rest_density)
+  mass_range_max: 1.0
+
+  # WCSPH specific parameters
+  
+  rest_density: 1000.0        # Water density
+  stiffness: 1000.0           # Tait's equation gas constant
+  exponent: 7.0                # Exponent in Tait's equation
+  viscosity: 0.3
+
+visualization:
+  fps: 24
