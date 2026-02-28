@@ -49,11 +49,13 @@ The simulator utilizes a multi-stage approach to learning and simulating fluid d
 
 ## Installation
 
+Suggested to use **Python 3.11**.
+
 ```bash
 git clone https://github.com/MarkoMile/gnn-physics-simulator.git
 cd gnn-physics-simulator
 
-python -m venv .venv
+python3.11 -m venv .venv
 source .venv/bin/activate
 
 pip install -r requirements.txt
