@@ -36,3 +36,6 @@ dist/
 # Debug scripts
 debug_*.py
 simulation.mp4
+
+# mp4 animations
+*.mp4
