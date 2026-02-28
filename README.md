@@ -1,31 +1,48 @@
 # GNN Physics Simulator
 
-A PyTorch Geometric implementation of [Learning to Simulate Complex Physics with Graph Networks](https://arxiv.org/abs/2002.09405) (Sanchez-Gonzalez et al., 2020). Trains a Graph Neural Network to predict particle accelerations from local interactions, reproducing DeepMind's architecture for simulating fluids, rigid bodies, and gravitational systems.
+A PyTorch Geometric implementation of [Learning to Simulate Complex Physics with Graph Networks](https://arxiv.org/abs/2002.09405) (Sanchez-Gonzalez et al., 2020). Trains a Graph Neural Network to predict particle accelerations from local interactions, reproducing DeepMind's architecture for simulating fluids, rigid bodies, and gravitational systems, with additional support for fine-tuning on custom-generated Weakly Compressible SPH (WCSPH) datasets.
+
+This project was developed as an optional assignment for the course **Numerical Algorithms and Numerical Software (E231)** at the Faculty of Technical Sciences, University of Novi Sad. It contrasts classic physically grounded numerical integrators against deep learning Message-Passing approaches.
 
 ## Project Structure
 
-```
+```text
 gnn-physics-simulator/
-├── configs/
-│   ├── config.yaml          # Central configuration (model, training, data, simulation)
-│   └── wcsph_transfer.yaml  # WCSph transfer learning parameters
+├── configs/                 # Configuration files (model, training, dataset, simulation)
+│   ├── config.yaml          # Central configuration for default training
+│   └── wcsph_transfer.yaml  # WCSPH transfer learning / fine-tuning config
 ├── models.py                # GNNSimulator: Encoder → Processor → Decoder architecture
-├── dataset.py               # ParticleDataset: TFRecord/NPZ loading, noise injection, graph building
+├── dataset.py               # ParticleDataset: NPZ loading, noise injection, graph building
 ├── train.py                 # Training loop: normalized loss, LR decay, checkpointing
-├── simulation.py            # N-Body & Fluid (pseudo-SPH) generators with dataset export
-├── integrators.py           # Euler, RK4 numerical integrators
+├── simulation.py            # WCSPH & N-Body simulators with dataset export
+├── integrators.py           # Symplectic Euler, RK4, Forward Euler (Numba JIT optimized)
 ├── scripts/
-│   ├── generate_dataset.py  # CLI to generate synthetic datasets from configs/config.yaml
+│   ├── generate_dataset.py  # CLI to generate synthetic fluid datasets
 │   └── download_dataset.py  # Download DeepMind datasets (WaterDrop, etc.)
+├── presentation/            # Interactive project presentation and generation scripts
+│   ├── Prezentacija.ipynb   # Presentation notebook (in Serbian) for the final presentation
+│   └── utils.py             # MP4 matplotlib animation generation utilities
+├── notebooks/
+│   ├── TestSim.ipynb        # Pure numerical WCSPH simulation testing and analysis
+│   ├── Visualize.ipynb      # Rollout visualization for DeepMind WaterDrop dataset
+│   └── Visualize_wcsph.ipynb# Rollout visualization for custom WCSPH dataset
 ├── utils/
 │   ├── train_kaggle.ipynb           # Kaggle notebook: train on full WaterDrop dataset
 │   └── train_generated_kaggle.ipynb # Kaggle notebook: generate + train synthetic data
-├── notebooks/
-│   ├── Project.ipynb                # Project presentation notebook
-│   ├── TestSim.ipynb                # N-Body simulation testing and visualization
-│   └── Visualize.ipynb              # Rollout visualization: predicted vs ground truth
-└── data/                    # Dataset directory (WaterDrop, WaterDropSample, generated)
+└── data/                    # Dataset directory 
+└── checkpoints/             # Saved model weights and training states (.pt files)
+    ├── best_model_wcsph.pt  # Model weights after WCSPH fine-tuning
+    └── best_model.pt        # Model weights after pre-training on WaterDrop dataset
 ```
+
+## Core Features & Methodology
+
+The simulator utilizes a multi-stage approach to learning and simulating fluid dynamics:
+
+1. **Physical Simulation (WCSPH):** Developed a custom *Weakly Compressible Smoothed Particle Hydrodynamics* (WCSPH) simulator with boundary particles handling and a highly stable **Symplectic Euler** numerical integrator optimized with **Numba JIT**.
+2. **Pre-Training:** The GNN model undergoes pre-training on DeepMind's extensive WaterDrop dataset to learn general fluid dynamics and container interactions.
+3. **Fine-Tuning:** Using the custom WCSPH numerical simulation (`scripts/generate_dataset.py`), generated a proprietary dataset. The model is fine-tuned on this dataset to adapt to the specific SPH formulation.
+4. **GNN Architecture:** An Encode-Process-Decode approach using `InteractionNetwork` message passing blocks, transforming kinetic data into a Radius Graph for prediction, as described in the original paper.
 
 ## Installation
 
@@ -54,55 +71,34 @@ python train.py --config configs/config.yaml
 python train.py --config configs/config.yaml --wandb
 ```
 
-### Generate and Train on Synthetic Data (WIP)
+Or use the provided Kaggle-ready notebook [train_kaggle.ipynb](utils/train_kaggle.ipynb).
+
+### Generate and Fine-Tune on Synthetic WCSPH Data
 
 ```bash
-# Generate an N-Body or Fluid dataset from configs/config.yaml
-python scripts/generate_dataset.py --config configs/config.yaml --output data/Generated
+# Generate a WCSPH Fluid dataset
+python scripts/generate_dataset.py --config configs/wcsph_transfer.yaml --output data/generated
 
-# Train on the generated data (set dataset_path and dataset_format in configs/config.yaml)
-python train.py --config configs/config.yaml
+# Fine-tune the pre-trained model on the generated data
+python train.py --config configs/wcsph_transfer.yaml --load checkpoints/best_model.pt
 ```
 
-### Train on Kaggle (GPU)
+Or use the provided Kaggle-ready notebook [finetune_wcsph_kaggle.ipynb](utils/finetune_wcsph_kaggle.ipynb).
 
-Upload `utils/train_kaggle.ipynb` to Kaggle for GPU-accelerated training on the full WaterDrop dataset, or `utils/train_generated_kaggle.ipynb` to generate and train on synthetic data.
+### Viewing the Presentation
 
-## Model Architecture
+The core results, algorithms, and 60fps rollout comparisons are structured into an interactive [notebook presentation](presentation/Prezentacija.ipynb) (in Serbian).
 
-The GNN simulator follows DeepMind's Encode-Process-Decode architecture:
-
-1. **Encoder**: Embeds node features (velocity history, boundary distances, mass, particle type) and edge features (relative displacement, distance) into 128-D latent vectors via 3-layer MLPs with LayerNorm.
-2. **Processor**: 10 sequential `InteractionNetwork` message passing blocks with residual connections on both nodes and edges, using sum aggregation.
-3. **Decoder**: Projects latent node states to predicted accelerations (no LayerNorm).
-
-**Important features matching the paper:**
-- Dynamic online normalization of inputs and outputs
-- Random-walk noise injection during training
+Visualizations for the WCSPH simulator, GNN trained on WaterDrop, and GNN fine-tuned for WCSPH are also available in separate notebooks in the [notebooks/](notebooks/) directory.
 
 ## Configuration
 
-All parameters are centralized in `configs/config.yaml`:
-
-See [configs/config.yaml](configs/config.yaml).
-
-## Simulation Types (WIP)
-
-The dataset generator supports two simulation types via `config.yaml`:
-
-- **`n_body`**: Gravitational N-body simulation with softened Newtonian forces
-- **`fluid`**: Pseudo-SPH fluid with downward gravity, inter-particle repulsion, and rigid bounding box walls
+All hyper-parameters, training details, and simulation setup variables are centralized in the `configs/` directory. See [configs/config.yaml](configs/config.yaml) and [configs/wcsph_transfer.yaml](configs/wcsph_transfer.yaml) for specific fields.
 
 ## References
 
 - [Learning to Simulate Complex Physics with Graph Networks](https://arxiv.org/abs/2002.09405) — Sanchez-Gonzalez et al., 2020
 - [Interaction Networks for Learning about Objects, Relations and Physics](https://arxiv.org/abs/1612.00222)
-- [Stanford CS224W: Simulating Complex Physics with Graph Networks](https://medium.com/stanford-cs224w/simulating-complex-physics-with-graph-networks-step-by-step-177354cb9b05)
-- [PyTorch Geometric Documentation](https://pytorch-geometric.readthedocs.io/)
-
-## Notes
-
-This project was developed as an optional project for the course Numerical Algorithms and Numerical Software (E231) at the Faculty of Technical Sciences, University of Novi Sad.
 
 ## License
 
