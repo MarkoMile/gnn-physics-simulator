@@ -2,7 +2,7 @@
 
 ![WCSPH vs GNN Comparison](media/wcsph-gnn-comparison.gif)
 
-A PyTorch Geometric implementation of [Learning to Simulate Complex Physics with Graph Networks](https://arxiv.org/abs/2002.09405) (Sanchez-Gonzalez et al., 2020). Trains a Graph Neural Network to predict particle accelerations from local interactions, reproducing DeepMind's architecture for simulating fluids, with additional fine-tuning on a custom-generated Weakly Compressible SPH (WCSPH) dataset.
+A PyTorch Geometric implementation of [Learning to Simulate Complex Physics with Graph Networks](https://arxiv.org/abs/2002.09405) (Sanchez-Gonzalez et al., 2020). Trains a Graph Neural Network to predict particle accelerations from local interactions, reproducing DeepMind's architecture for simulating fluids, with additional fine-tuning on a custom Weakly Compressible Smoothed Particle Hydrodynamics (WCSPH) dataset and support for optimized dataset generation.
 
 This project was developed as an optional assignment for the course **Numerical Algorithms and Numerical Software (E231)** at the Faculty of Technical Sciences, University of Novi Sad. It contrasts classic physically grounded numerical integrators against deep learning Message-Passing approaches.
 
